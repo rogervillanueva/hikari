@@ -21,8 +21,8 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   const loadDocuments = useDocumentsStore((state) => state.loadDocuments);
   const [activeSentence, setActiveSentence] = useState<number | null>(null);
   const playingRef = useRef(false);
-  const [paragraphTranslations, setParagraphTranslations] = useState<Record<number, string>>({});
-  const [openParagraphTranslations, setOpenParagraphTranslations] = useState<Record<number, boolean>>({});
+  const [sentenceTranslations, setSentenceTranslations] = useState<Record<number, string>>({});
+  const [openSentenceTranslations, setOpenSentenceTranslations] = useState<Record<number, boolean>>({});
   const [wordPopup, setWordPopup] = useState<{ sentence: Sentence; token: string; definition: string } | null>(null);
 
   const document = useMemo(() => documents.find((doc) => doc.id === documentId), [documents, documentId]);
@@ -62,19 +62,18 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     }
   }, [document, documents.length, router]);
 
-  const handleToggleParagraphTranslation = async (paragraphIndex: number, paragraphSentences: Sentence[]) => {
-    setOpenParagraphTranslations((prev) => ({ ...prev, [paragraphIndex]: !prev[paragraphIndex] }));
-    const willOpen = !openParagraphTranslations[paragraphIndex];
+  const handleToggleSentenceTranslation = async (sentence: Sentence) => {
+    const willOpen = !openSentenceTranslations[sentence.index];
+    setOpenSentenceTranslations((prev) => ({ ...prev, [sentence.index]: willOpen }));
     if (!willOpen) {
       return;
     }
-    if (paragraphTranslations[paragraphIndex]) {
+    if (sentenceTranslations[sentence.index]) {
       return;
     }
     const provider = getTranslationProvider(ACTIVE_PROVIDER);
     const sourceLanguage = document?.lang_source ?? 'ja';
     const targetLanguage = sourceLanguage === 'ja' ? 'en' : 'ja';
-    const paragraphText = paragraphSentences.map((sentence) => sentence.text_raw).join(' ');
     const options =
       targetLanguage === 'ja'
         ? {
@@ -83,12 +82,12 @@ export function ReaderView({ documentId }: ReaderViewProps) {
           }
         : undefined;
     const [translation] = await provider.translateSentences(
-      [paragraphText],
+      [sentence.text_raw],
       sourceLanguage,
       targetLanguage,
       options
     );
-    setParagraphTranslations((prev) => ({ ...prev, [paragraphIndex]: translation }));
+    setSentenceTranslations((prev) => ({ ...prev, [sentence.index]: translation }));
   };
 
   const playSentence = async (index: number, sentence: Sentence) => {
@@ -160,15 +159,16 @@ export function ReaderView({ documentId }: ReaderViewProps) {
             key={`paragraph-${paragraphIndex}`}
             className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm transition-colors dark:border-neutral-800 dark:bg-neutral-900"
           >
-            <div className="flex items-start justify-between gap-4">
-              <p className="flex-1 text-lg leading-relaxed">
-                {paragraph.map((sentence, sentenceIndex) => {
-                  const isActive = activeSentence === sentence.index;
-                  return (
-                    <span key={sentence.id} className="inline">
+            <div className="text-lg leading-relaxed">
+              {paragraph.map((sentence, sentenceIndex) => {
+                const isActive = activeSentence === sentence.index;
+                const isTranslationOpen = openSentenceTranslations[sentence.index];
+                return (
+                  <span key={sentence.id} className="inline-block align-baseline">
+                    <span className="inline-flex items-center gap-2 align-baseline">
                       <button
                         type="button"
-                        className="mr-2 inline-flex h-7 w-7 items-center justify-center rounded-full border border-neutral-300 text-neutral-700 hover:border-primary hover:text-primary dark:border-neutral-700 dark:text-neutral-200"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-neutral-300 text-neutral-700 hover:border-primary hover:text-primary dark:border-neutral-700 dark:text-neutral-200"
                         onClick={() => void playSentence(sentence.index, sentence)}
                         aria-label={`Play sentence ${sentence.index + 1}`}
                       >
@@ -197,25 +197,25 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                           );
                         })}
                       </span>
-                      {includeSentenceSpacing && sentenceIndex < paragraph.length - 1 && ' '}
+                      <button
+                        type="button"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-neutral-300 text-neutral-700 hover:border-primary hover:text-primary dark:border-neutral-700 dark:text-neutral-200"
+                        onClick={() => void handleToggleSentenceTranslation(sentence)}
+                        aria-label={`Toggle translation for sentence ${sentence.index + 1}`}
+                      >
+                        <Ellipsis className="h-4 w-4" />
+                      </button>
                     </span>
-                  );
-                })}
-              </p>
-              <button
-                type="button"
-                className="rounded-full border border-neutral-300 p-2 text-neutral-700 hover:border-primary hover:text-primary dark:border-neutral-700 dark:text-neutral-200"
-                onClick={() => void handleToggleParagraphTranslation(paragraphIndex, paragraph)}
-                aria-label={`Toggle translation for paragraph ${paragraphIndex + 1}`}
-              >
-                <Ellipsis className="h-4 w-4" />
-              </button>
+                    {isTranslationOpen && (
+                      <span className="mt-2 block rounded-md bg-neutral-100 p-3 text-sm text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
+                        {sentenceTranslations[sentence.index] ?? 'Translating…'}
+                      </span>
+                    )}
+                    {includeSentenceSpacing && sentenceIndex < paragraph.length - 1 && <span> </span>}
+                  </span>
+                );
+              })}
             </div>
-            {openParagraphTranslations[paragraphIndex] && (
-              <p className="mt-3 rounded-md bg-neutral-100 p-3 text-sm text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
-                {paragraphTranslations[paragraphIndex] ?? 'Translating…'}
-              </p>
-            )}
           </article>
         ))}
       </section>
