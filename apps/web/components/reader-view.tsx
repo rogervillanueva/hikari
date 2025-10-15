@@ -107,51 +107,55 @@ export function ReaderView({ documentId }: ReaderViewProps) {
           </button>
         </div>
       </header>
-      <section className="space-y-6">
+      <section className="space-y-4">
         {sentenceList.map((sentence, index) => (
-          <article
+          <div
             key={sentence.id}
-            className={`rounded-lg border border-neutral-200 bg-white p-4 shadow-sm transition dark:border-neutral-800 dark:bg-neutral-900 ${
-              activeSentence === index ? 'border-primary ring-2 ring-primary/20' : ''
+            className={`flex gap-3 rounded-md px-3 py-3 transition-colors ${
+              activeSentence === index ? 'bg-primary/10 ring-1 ring-primary/40 dark:bg-primary/20' : 'hover:bg-neutral-50 dark:hover:bg-neutral-900'
             }`}
           >
-            <header className="flex items-center gap-2">
+            <div className="flex shrink-0 flex-col items-center gap-2 pt-1">
               <button
-                className="rounded-full border border-neutral-300 p-2 hover:border-primary dark:border-neutral-700"
+                type="button"
+                className="rounded-full border border-neutral-300 p-2 text-neutral-700 hover:border-primary hover:text-primary dark:border-neutral-700 dark:text-neutral-200"
                 onClick={() => void playSentence(index, sentence)}
                 aria-label={`Play sentence ${index + 1}`}
               >
                 <Play className="h-4 w-4" />
               </button>
               <button
-                className="rounded-full border border-neutral-300 p-2 hover:border-primary dark:border-neutral-700"
+                type="button"
+                className="rounded-full border border-neutral-300 p-2 text-neutral-700 hover:border-primary hover:text-primary dark:border-neutral-700 dark:text-neutral-200"
                 onClick={() => void handleToggleTranslation(index, sentence)}
                 aria-label={`Toggle translation for sentence ${index + 1}`}
               >
                 <Ellipsis className="h-4 w-4" />
               </button>
-              <span className="text-xs text-neutral-500">Sentence {index + 1}</span>
-            </header>
-            <p className="mt-3 text-lg leading-relaxed">
-              {sentence.text_raw.split(/(\s+)/).map((token, tokenIndex) => {
-                if (!token.trim()) return <span key={`${sentence.id}-${tokenIndex}`}>{token}</span>;
-                return (
-                  <button
-                    key={`${sentence.id}-${tokenIndex}`}
-                    className="rounded px-1 py-0.5 hover:bg-primary/10"
-                    onClick={() => void handleWordClick(sentence, token)}
-                  >
-                    {token}
-                  </button>
-                );
-              })}
-            </p>
-            {openTranslations[index] && (
-              <p className="mt-2 rounded-md bg-neutral-100 p-3 text-sm text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
-                {translations[index] ?? 'Translating…'}
+            </div>
+            <div className="flex-1">
+              <p className="text-lg leading-relaxed">
+                {sentence.text_raw.split(/(\s+)/).map((token, tokenIndex) => {
+                  if (!token.trim()) return <span key={`${sentence.id}-${tokenIndex}`}>{token}</span>;
+                  return (
+                    <button
+                      key={`${sentence.id}-${tokenIndex}`}
+                      type="button"
+                      className="rounded px-1 py-0.5 text-left hover:bg-primary/10 focus:outline-none focus:ring-1 focus:ring-primary"
+                      onClick={() => void handleWordClick(sentence, token)}
+                    >
+                      {token}
+                    </button>
+                  );
+                })}
               </p>
-            )}
-          </article>
+              {openTranslations[index] && (
+                <p className="mt-3 rounded-md bg-neutral-100 p-3 text-sm text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
+                  {translations[index] ?? 'Translating…'}
+                </p>
+              )}
+            </div>
+          </div>
         ))}
       </section>
       {wordPopup && (
