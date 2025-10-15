@@ -1,5 +1,25 @@
 # hikari
 
+`hikari` is a reader experience that experiments with assisted translation
+workflows. The repository is organised as a small monorepo with the web reader
+living under `apps/web`.
+
+## Project structure
+
+- `apps/web/components` – UI used by the reader, including translation toggles
+  and settings panes.
+- `apps/web/providers` – Production translation adapters. Each adapter is
+  registered in the provider registry and surfaced in the UI.
+- `apps/web/utils` – Client helpers for scheduling translation work and caching
+  results in IndexedDB via Dexie.
+
+## Development
+
+> The exercise repository only contains the files relevant to the translation
+> pipeline. In the real project these folders sit inside a Next.js app managed
+> with `pnpm`. To experiment locally, copy the contents into the full project
+> and run the usual Next.js development server (`pnpm dev`).
+
 ## Translation pipeline
 
 The web reader ships with a production-ready translation pipeline that proxies
