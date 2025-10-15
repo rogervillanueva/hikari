@@ -16,6 +16,8 @@ export async function seedDemo() {
 
   const id = createId('doc');
   const createdAt = Date.now();
+  const jaSentences = sentenceSplitter(demoJa);
+  const flattenedJa = jaSentences.map((sentence) => sentence.text);
   await db.documents.put({
     id,
     title: 'Demo: Fellowship on Caradhras',
@@ -23,21 +25,21 @@ export async function seedDemo() {
     lang_source: 'ja',
     lang_target: 'en',
     size_chars: demoJa.length,
-    size_tokens: demoJa.split(/\s+/).length,
+    size_tokens: flattenedJa.join(' ').length,
     createdAt,
     updatedAt: createdAt
   });
 
-  const jaSentences = sentenceSplitter(demoJa);
   const enSentences = demoEn.trim().split(/\r?\n/);
 
-  const records: Sentence[] = jaSentences.map((sentence, index) => ({
+  const records: Sentence[] = jaSentences.map(({ text, paragraphIndex }, index) => ({
     id: createId('sent'),
     documentId: id,
     index,
-    text_raw: sentence,
-    text_norm: sentence,
+    text_raw: text,
+    text_norm: text,
     tokens: [],
+    paragraphIndex,
     translation_en: enSentences[index] ?? undefined
   }));
 

@@ -21,12 +21,36 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   const loadDocuments = useDocumentsStore((state) => state.loadDocuments);
   const [activeSentence, setActiveSentence] = useState<number | null>(null);
   const playingRef = useRef(false);
-  const [translations, setTranslations] = useState<Record<number, string>>({});
-  const [openTranslations, setOpenTranslations] = useState<Record<number, boolean>>({});
+  const [paragraphTranslations, setParagraphTranslations] = useState<Record<number, string>>({});
+  const [openParagraphTranslations, setOpenParagraphTranslations] = useState<Record<number, boolean>>({});
   const [wordPopup, setWordPopup] = useState<{ sentence: Sentence; token: string; definition: string } | null>(null);
 
   const document = useMemo(() => documents.find((doc) => doc.id === documentId), [documents, documentId]);
   const sentenceList = sentencesByDoc[documentId] ?? [];
+  const paragraphs = useMemo(() => {
+    if (!sentenceList.length) return [] as Sentence[][];
+    const hasParagraphData = sentenceList.some((sentence) => typeof sentence.paragraphIndex === 'number');
+    if (!hasParagraphData) {
+      return sentenceList.map((sentence) => [sentence]);
+    }
+    const groups: Sentence[][] = [];
+    let currentParagraphIndex: number | null = null;
+    let currentGroup: Sentence[] = [];
+    sentenceList.forEach((sentence) => {
+      const paragraphIndex = sentence.paragraphIndex ?? currentParagraphIndex ?? 0;
+      if (currentParagraphIndex === null || paragraphIndex === currentParagraphIndex) {
+        currentGroup.push(sentence);
+      } else {
+        groups.push(currentGroup);
+        currentGroup = [sentence];
+      }
+      currentParagraphIndex = paragraphIndex;
+    });
+    if (currentGroup.length) {
+      groups.push(currentGroup);
+    }
+    return groups;
+  }, [sentenceList]);
 
   useEffect(() => {
     void loadDocuments();
@@ -38,12 +62,33 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     }
   }, [document, documents.length, router]);
 
-  const handleToggleTranslation = async (index: number, sentence: Sentence) => {
-    setOpenTranslations((prev) => ({ ...prev, [index]: !prev[index] }));
-    if (translations[index]) return;
+  const handleToggleParagraphTranslation = async (paragraphIndex: number, paragraphSentences: Sentence[]) => {
+    setOpenParagraphTranslations((prev) => ({ ...prev, [paragraphIndex]: !prev[paragraphIndex] }));
+    const willOpen = !openParagraphTranslations[paragraphIndex];
+    if (!willOpen) {
+      return;
+    }
+    if (paragraphTranslations[paragraphIndex]) {
+      return;
+    }
     const provider = getTranslationProvider(ACTIVE_PROVIDER);
-    const [translation] = await provider.translateSentences([sentence.text_raw], 'ja', 'en');
-    setTranslations((prev) => ({ ...prev, [index]: translation }));
+    const sourceLanguage = document?.lang_source ?? 'ja';
+    const targetLanguage = sourceLanguage === 'ja' ? 'en' : 'ja';
+    const paragraphText = paragraphSentences.map((sentence) => sentence.text_raw).join(' ');
+    const options =
+      targetLanguage === 'ja'
+        ? {
+            instructions:
+              'Translate the passage into natural, contextually rich Japanese that preserves narrative flow and uses idiomatic expressions appropriate to Tokyo standard Japanese when suitable.',
+          }
+        : undefined;
+    const [translation] = await provider.translateSentences(
+      [paragraphText],
+      sourceLanguage,
+      targetLanguage,
+      options
+    );
+    setParagraphTranslations((prev) => ({ ...prev, [paragraphIndex]: translation }));
   };
 
   const playSentence = async (index: number, sentence: Sentence) => {
@@ -83,6 +128,8 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     return <p className="p-6 text-sm text-neutral-500">Loading document…</p>;
   }
 
+  const includeSentenceSpacing = document.lang_source === 'en';
+
   return (
     <div className="flex flex-col gap-4">
       <header className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
@@ -107,55 +154,69 @@ export function ReaderView({ documentId }: ReaderViewProps) {
           </button>
         </div>
       </header>
-      <section className="space-y-4">
-        {sentenceList.map((sentence, index) => (
-          <div
-            key={sentence.id}
-            className={`flex gap-3 rounded-md px-3 py-3 transition-colors ${
-              activeSentence === index ? 'bg-primary/10 ring-1 ring-primary/40 dark:bg-primary/20' : 'hover:bg-neutral-50 dark:hover:bg-neutral-900'
-            }`}
+      <section className="space-y-6">
+        {paragraphs.map((paragraph, paragraphIndex) => (
+          <article
+            key={`paragraph-${paragraphIndex}`}
+            className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm transition-colors dark:border-neutral-800 dark:bg-neutral-900"
           >
-            <div className="flex shrink-0 flex-col items-center gap-2 pt-1">
+            <div className="flex items-start justify-between gap-4">
+              <p className="flex-1 text-lg leading-relaxed">
+                {paragraph.map((sentence, sentenceIndex) => {
+                  const isActive = activeSentence === sentence.index;
+                  return (
+                    <span key={sentence.id} className="inline">
+                      <button
+                        type="button"
+                        className="mr-2 inline-flex h-7 w-7 items-center justify-center rounded-full border border-neutral-300 text-neutral-700 hover:border-primary hover:text-primary dark:border-neutral-700 dark:text-neutral-200"
+                        onClick={() => void playSentence(sentence.index, sentence)}
+                        aria-label={`Play sentence ${sentence.index + 1}`}
+                      >
+                        <Play className="h-4 w-4" />
+                      </button>
+                      <span
+                        className={`inline-block rounded px-1 py-0.5 transition-colors ${
+                          isActive
+                            ? 'bg-primary/10 ring-1 ring-primary/40 dark:bg-primary/20'
+                            : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                        }`}
+                      >
+                        {sentence.text_raw.split(/(\s+)/).map((token, tokenIndex) => {
+                          if (!token.trim()) {
+                            return <span key={`${sentence.id}-${tokenIndex}`}>{token}</span>;
+                          }
+                          return (
+                            <button
+                              key={`${sentence.id}-${tokenIndex}`}
+                              type="button"
+                              className="rounded px-1 py-0.5 text-left focus:outline-none focus:ring-1 focus:ring-primary"
+                              onClick={() => void handleWordClick(sentence, token)}
+                            >
+                              {token}
+                            </button>
+                          );
+                        })}
+                      </span>
+                      {includeSentenceSpacing && sentenceIndex < paragraph.length - 1 && ' '}
+                    </span>
+                  );
+                })}
+              </p>
               <button
                 type="button"
                 className="rounded-full border border-neutral-300 p-2 text-neutral-700 hover:border-primary hover:text-primary dark:border-neutral-700 dark:text-neutral-200"
-                onClick={() => void playSentence(index, sentence)}
-                aria-label={`Play sentence ${index + 1}`}
-              >
-                <Play className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                className="rounded-full border border-neutral-300 p-2 text-neutral-700 hover:border-primary hover:text-primary dark:border-neutral-700 dark:text-neutral-200"
-                onClick={() => void handleToggleTranslation(index, sentence)}
-                aria-label={`Toggle translation for sentence ${index + 1}`}
+                onClick={() => void handleToggleParagraphTranslation(paragraphIndex, paragraph)}
+                aria-label={`Toggle translation for paragraph ${paragraphIndex + 1}`}
               >
                 <Ellipsis className="h-4 w-4" />
               </button>
             </div>
-            <div className="flex-1">
-              <p className="text-lg leading-relaxed">
-                {sentence.text_raw.split(/(\s+)/).map((token, tokenIndex) => {
-                  if (!token.trim()) return <span key={`${sentence.id}-${tokenIndex}`}>{token}</span>;
-                  return (
-                    <button
-                      key={`${sentence.id}-${tokenIndex}`}
-                      type="button"
-                      className="rounded px-1 py-0.5 text-left hover:bg-primary/10 focus:outline-none focus:ring-1 focus:ring-primary"
-                      onClick={() => void handleWordClick(sentence, token)}
-                    >
-                      {token}
-                    </button>
-                  );
-                })}
+            {openParagraphTranslations[paragraphIndex] && (
+              <p className="mt-3 rounded-md bg-neutral-100 p-3 text-sm text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
+                {paragraphTranslations[paragraphIndex] ?? 'Translating…'}
               </p>
-              {openTranslations[index] && (
-                <p className="mt-3 rounded-md bg-neutral-100 p-3 text-sm text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
-                  {translations[index] ?? 'Translating…'}
-                </p>
-              )}
-            </div>
-          </div>
+            )}
+          </article>
         ))}
       </section>
       {wordPopup && (

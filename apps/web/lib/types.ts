@@ -18,6 +18,7 @@ export interface Sentence {
   index: number;
   text_raw: string;
   text_norm?: string;
+  paragraphIndex?: number;
   tokens: Token[];
   translation_en?: string;
   audioSentenceId?: string;

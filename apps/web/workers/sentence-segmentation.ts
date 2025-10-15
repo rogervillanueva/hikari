@@ -1,15 +1,35 @@
-export function sentenceSplitter(text: string): string[] {
-  const sentences: string[] = [];
-  let buffer = '';
-  for (const char of text) {
-    buffer += char;
-    if (/^[。！？!?]$/.test(char)) {
-      sentences.push(buffer.trim());
-      buffer = '';
+export interface SegmentedSentence {
+  text: string;
+  paragraphIndex: number;
+}
+
+export function sentenceSplitter(text: string): SegmentedSentence[] {
+  const sentences: SegmentedSentence[] = [];
+  const paragraphs = text.split(/\r?\n\s*\r?\n/);
+
+  paragraphs.forEach((rawParagraph, paragraphIndex) => {
+    const paragraph = rawParagraph.trim();
+    if (!paragraph) {
+      return;
     }
-  }
-  if (buffer.trim().length) {
-    sentences.push(buffer.trim());
-  }
-  return sentences.filter(Boolean);
+
+    let buffer = '';
+    for (const char of paragraph) {
+      buffer += char;
+      if (/^[。！？!?]$/.test(char)) {
+        const sentence = buffer.trim();
+        if (sentence.length) {
+          sentences.push({ text: sentence, paragraphIndex });
+        }
+        buffer = '';
+      }
+    }
+
+    const trailing = buffer.trim();
+    if (trailing.length) {
+      sentences.push({ text: trailing, paragraphIndex });
+    }
+  });
+
+  return sentences;
 }
