@@ -1,0 +1,9 @@
+version: '3.9'
+services:
+  ocr:
+    build: ./apps/ocr-server
+    ports:
+      - '7070:7070'
+    environment:
+      - PORT=7070
+    restart: unless-stopped
