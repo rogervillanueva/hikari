@@ -1,11 +1,15 @@
-.DS_Store
 node_modules
-dist
+.pnpm-store
 .next
 out
-coverage
+dist
+.DS_Store
+.env
+.env.local
+.env.*
 *.log
-# binaries
+
+# binaries (Codex PR safe)
 *.png
 *.jpg
 *.jpeg
@@ -19,3 +23,5 @@ coverage
 *.pdf
 *.ttf
 *.otf
+*.woff
+*.woff2
