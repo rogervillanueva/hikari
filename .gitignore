@@ -1,0 +1,21 @@
+.DS_Store
+node_modules
+dist
+.next
+out
+coverage
+*.log
+# binaries
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.ico
+*.mp3
+*.wav
+*.ogg
+*.m4a
+*.pdf
+*.ttf
+*.otf
