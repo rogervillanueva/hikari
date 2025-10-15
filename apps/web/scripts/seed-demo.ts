@@ -25,3 +25,5 @@ export function prepareDemoSentences(documents: DemoDocument[]): PersistedSenten
 export function seedDemo(documents: DemoDocument[]): PersistedSentence[] {
   return prepareDemoSentences(documents);
 }
+
+export default seedDemo;

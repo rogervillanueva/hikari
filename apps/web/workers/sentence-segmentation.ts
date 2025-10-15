@@ -66,6 +66,7 @@ interface Token {
 const TOKEN_REGEX = /(\u2026|\.\.\.)|([.!?])|(["'“”‘’«»(){}\[\]])|(\s+)|([^\s]+)/g;
 
 function tokenize(text: string): Token[] {
+  TOKEN_REGEX.lastIndex = 0;
   const tokens: Token[] = [];
   let match: RegExpExecArray | null;
 
@@ -172,3 +173,19 @@ export function splitIntoSentences(text: string): string[] {
 }
 
 export default splitIntoSentences;
+
+type WorkerLike = {
+  postMessage: (value: unknown) => void;
+  onmessage: ((event: { data: unknown }) => void) | null;
+};
+
+const globalWorker = globalThis as Partial<WorkerLike>;
+const workerPostMessage = globalWorker.postMessage;
+
+if (typeof workerPostMessage === 'function') {
+  globalWorker.onmessage = (event) => {
+    const incoming = event?.data;
+    const text = typeof incoming === 'string' ? incoming : String(incoming ?? '');
+    workerPostMessage.call(globalWorker, splitIntoSentences(text));
+  };
+}
