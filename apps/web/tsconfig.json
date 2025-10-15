@@ -8,7 +8,8 @@
       "@/providers/*": ["./providers/*"],
       "@/store/*": ["./store/*"],
       "@/workers/*": ["./workers/*"],
-      "@/fixtures/*": ["./fixtures/*"]
+      "@/fixtures/*": ["./fixtures/*"],
+      "@/scripts/*": ["./scripts/*"]
     }
   },
   "include": [
