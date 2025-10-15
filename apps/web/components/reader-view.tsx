@@ -7,7 +7,7 @@ import { ACTIVE_PROVIDER } from '@/lib/config';
 import { useDocumentsStore } from '@/store/documents';
 import { getDictionaryProvider } from '@/providers/dictionary/mock';
 import { getTranslationProvider } from '@/providers/translation/mock';
-import { getTtsProvider } from '@/providers/tts/mock';
+import { getTtsProvider } from '@/providers/tts';
 import type { Sentence } from '@/lib/types';
 
 interface ReaderViewProps {

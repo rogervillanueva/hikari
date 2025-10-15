@@ -17,6 +17,8 @@ pnpm install
 pnpm dev # starts apps/web on http://localhost:3000
 ```
 
+> Need text-to-speech? Copy `apps/web/.env.local.example` to `apps/web/.env.local`, add your Azure Speech key, then restart the dev server.
+
 1. Visit `http://localhost:3000/dev/seed` and click **Seed Demo Data**.
 2. Open `/documents` to browse imported documents.
 3. Enter a document to test sentence playback, inline translations, and word popups.
@@ -28,19 +30,21 @@ Provider adapters live under `apps/web/providers/*`.
 
 * **Translation** — `TranslationProvider` interface with a mock implementation returning demo fixture text. Use `getTranslationProvider(id)` to fetch the active provider.
 * **Dictionary** — `DictionaryProvider` interface returning mock readings + translation fallback. Replace with JMdict or a licensed API.
-* **TTS** — `TtsProvider` interface returning beep audio blobs and fake marks. Swap for Azure or AWS Polly by implementing the same methods.
+* **TTS** — `TtsProvider` interface with a mock beep generator and an Azure Cognitive Services integration. Switch providers with `NEXT_PUBLIC_PROVIDER`.
 
-Set `NEXT_PUBLIC_PROVIDER=mock` (default) to ensure the mock adapters are used. Future integrations can branch on this environment variable.
+Set `NEXT_PUBLIC_PROVIDER=mock` (default) to use local beeps, or `NEXT_PUBLIC_PROVIDER=azure` once credentials are configured. Future integrations can branch on this environment variable.
 
 ## Environment Variables
 
 The demo does not require keys, but placeholders are documented for future integrations:
 
-* `AZURE_TTS_KEY`, `AZURE_TTS_REGION`
+* `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION`, optional `AZURE_SPEECH_ENDPOINT`
+* `AZURE_TTS_BUDGET_CENTS` (default `$1.00` per day)
 * `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`
 * `OPENAI_API_KEY`, `DEEPL_API_KEY`
 * `OCR_SERVER_URL`
 * `NEXT_PUBLIC_PROVIDER`
+* `NEXT_PUBLIC_TTS_VOICE`
 
 ## What’s Stubbed
 

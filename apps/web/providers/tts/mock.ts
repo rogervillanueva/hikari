@@ -32,7 +32,7 @@ function audioBufferToWav(buffer: AudioBuffer) {
   const length = buffer.length * numOfChan * 2 + 44;
   const bufferArray = new ArrayBuffer(length);
   const view = new DataView(bufferArray);
-  const channels = [];
+  const channels = [] as Float32Array[];
   let offset = 0;
   let pos = 0;
 
@@ -103,11 +103,3 @@ export const mockTtsProvider: TtsProvider = {
     return existing;
   }
 };
-
-export const ttsProviders: Record<string, TtsProvider> = {
-  mock: mockTtsProvider
-};
-
-export function getTtsProvider(id: string): TtsProvider {
-  return ttsProviders[id] ?? mockTtsProvider;
-}
