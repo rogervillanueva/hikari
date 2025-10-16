@@ -72,22 +72,35 @@ default demo uses `Intl.Segmenter` for coarse tokenisation and the mock
 dictionary provider, which is enough to explore the UI but does not return full
 grammar metadata. To plug in production services:
 
-1. **Morphology API** — expose an HTTP endpoint that accepts `POST
-   {"text":"…"}` and returns a payload shaped like
-   `{ tokens: [{ surface, base, reading, pos, features, conjugation, pitch }] }`.
-   Configure the client with:
+1. **Morphology API** — enable the built-in Sudachi-powered tokenizer by
+   pointing the client at `/api/morphology` and providing a dictionary file.
+   The worker expects `{ tokens: [{ surface, base, reading, pos, features,
+   conjugation, pitch }] }` so any compatible analyzer can be swapped in later.
+   Start with:
 
    ```bash
-   NEXT_PUBLIC_MORPHOLOGY_ENDPOINT=https://your-morphology-endpoint.example.com/parse
-   NEXT_PUBLIC_MORPHOLOGY_API_KEY=OPTIONAL_HEADER_VALUE
+   NEXT_PUBLIC_MORPHOLOGY_ENDPOINT=/api/morphology
+   NEXT_PUBLIC_MORPHOLOGY_API_KEY=optional-shared-secret
+   SUDACHI_SPLIT_MODE=C
+   # Optional override when the dictionary lives elsewhere
+   # SUDACHI_DICTIONARY_PATH=/absolute/path/to/system_full.dic
    ```
 
-   *Recommended options*: [Goo Labs Morphological Analysis
-   API](https://labs.goo.ne.jp/api/morph) (`app_id` header → proxy it through a
-   lightweight Next.js API route) or an OpenAI-compatible model (e.g.
-   `gpt-4o-mini`) that emits JSON tokens. Update the server route to translate
-   the provider-specific response into the schema above and include
-   `conjugation.type/form/description` plus pitch metadata when available.
+   Steps:
+
+   - Install the Sudachi WASM bindings in the web app: `pnpm --filter web add
+     @sudachi/sudachi` (or vendor a compatible module and update
+     `SUDACHI_MODULE_CANDIDATES`).
+   - Download the latest Sudachi Full dictionary and place the extracted
+     `system_full.dic` under `apps/web/lib/sudachi/` (the directory is gitignored)
+     or set `SUDACHI_DICTIONARY_PATH` to its location.
+   - Restart `pnpm dev` so the API route can initialise the tokenizer.
+   - Re-import or trigger the retokenisation workflow for existing documents to
+     refresh stored tokens with Sudachi output.
+
+   Prefer a different analyzer (SudachiPy, Kuromoji, MeCab, etc.)? Expose it via
+   an HTTP endpoint that returns the same token payload and update
+   `NEXT_PUBLIC_MORPHOLOGY_ENDPOINT` accordingly.
 
 2. **Dictionary data** — replace `providers/dictionary/mock.ts` with a real
    dictionary (JMdict, commercial API, etc.). Populate `Definition.senses`,

@@ -26,3 +26,7 @@ dist
 *.otf
 *.woff
 *.woff2
+
+# Sudachi dictionaries (binary assets provided locally)
+apps/web/lib/sudachi/*.dic
+apps/web/lib/sudachi/*.dic.*
