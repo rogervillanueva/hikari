@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import type { TokenizeResponseToken } from '@/workers/tokenize-ja';
 
@@ -49,38 +50,45 @@ async function ensureTokenizer(): Promise<KuromojiTokenizerLike> {
 }
 
 async function loadTokenizer(): Promise<KuromojiTokenizerLike> {
+  const require = createRequire(import.meta.url);
+  let kuromoji: unknown;
   try {
-    const kuromojiModule = await import('kuromoji');
-    const kuromoji = (kuromojiModule as { default?: unknown }).default ?? kuromojiModule;
-    if (!kuromoji || typeof (kuromoji as { builder?: unknown }).builder !== 'function') {
-      throw new KuromojiUnavailableError('kuromoji module did not expose a builder function.');
-    }
-    const builder = (kuromoji as { builder: (options: { dicPath: string }) => unknown }).builder({
-      dicPath: DEFAULT_DIC_PATH,
-    }) as {
-      build: (callback: (error: unknown, tokenizer: KuromojiTokenizerLike) => void) => void;
-    };
-    return await new Promise<KuromojiTokenizerLike>((resolve, reject) => {
-      builder.build((error: unknown, tokenizer: KuromojiTokenizerLike) => {
-        if (error) {
-          reject(
-            new KuromojiUnavailableError('Failed to build kuromoji tokenizer.', [
-              `Ensure the kuromoji dictionary exists at ${DEFAULT_DIC_PATH}.`,
-            ], { cause: error }),
-          );
-          return;
-        }
-        resolve(tokenizer);
-      });
-    });
+    const moduleName = process.env.KUROMOJI_MODULE ?? 'kuromoji';
+    kuromoji = require(moduleName);
   } catch (error) {
     if (error instanceof KuromojiUnavailableError) {
       throw error;
     }
     throw new KuromojiUnavailableError('kuromoji module is not installed.', [
-      'Install it with `pnpm --filter web add kuromoji`.',
+      'Install it with `pnpm --filter web add kuromoji` inside the repo.',
+      'If you are using a custom tokenizer, set KUROMOJI_MODULE to its package name.',
     ], { cause: error });
   }
+
+  const kuromojiNamespace = (kuromoji as { default?: unknown }).default ?? kuromoji;
+  if (!kuromojiNamespace || typeof (kuromojiNamespace as { builder?: unknown }).builder !== 'function') {
+    throw new KuromojiUnavailableError('kuromoji module did not expose a builder function.');
+  }
+
+  const builder = (kuromojiNamespace as { builder: (options: { dicPath: string }) => unknown }).builder({
+    dicPath: DEFAULT_DIC_PATH,
+  }) as {
+    build: (callback: (error: unknown, tokenizer: KuromojiTokenizerLike) => void) => void;
+  };
+
+  return await new Promise<KuromojiTokenizerLike>((resolve, reject) => {
+    builder.build((error: unknown, tokenizer: KuromojiTokenizerLike) => {
+      if (error) {
+        reject(
+          new KuromojiUnavailableError('Failed to build kuromoji tokenizer.', [
+            `Ensure the kuromoji dictionary exists at ${DEFAULT_DIC_PATH}.`,
+          ], { cause: error }),
+        );
+        return;
+      }
+      resolve(tokenizer);
+    });
+  });
 }
 
 function mapToken(token: KuromojiTokenLike): TokenizeResponseToken | null {

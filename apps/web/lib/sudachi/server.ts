@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import type { TokenizeResponseToken } from '@/workers/tokenize-ja';
 
@@ -115,13 +116,21 @@ async function loadDictionaryBytes(dictionaryPath: string): Promise<Uint8Array> 
 }
 
 async function loadSudachiModule(): Promise<unknown> {
+  const require = createRequire(import.meta.url);
   let lastError: unknown;
   for (const candidate of SUDACHI_MODULE_CANDIDATES) {
     try {
-      const module = await import(candidate);
-      return module;
+      return require(candidate);
     } catch (error) {
       lastError = error;
+      if (isRequireEsmError(error)) {
+        try {
+          const module = await import(candidate);
+          return module;
+        } catch (innerError) {
+          lastError = innerError;
+        }
+      }
     }
   }
   throw new SudachiUnavailableError('Sudachi module is not installed.', {
@@ -131,6 +140,10 @@ async function loadSudachiModule(): Promise<unknown> {
       'If you are vendoring another Sudachi-compatible module, update SUDACHI_MODULE_CANDIDATES in apps/web/lib/sudachi/server.ts.',
     ],
   });
+}
+
+function isRequireEsmError(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && (error as { code?: unknown }).code === 'ERR_REQUIRE_ESM';
 }
 
 async function instantiateTokenizer(
