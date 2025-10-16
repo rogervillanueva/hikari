@@ -699,7 +699,7 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                         <Play className="h-4 w-4" />
                       </button>
                       <span
-                        className={`inline-block rounded px-1 py-0.5 transition-colors ${
+                        className={`inline-flex flex-wrap items-baseline rounded px-1 py-0.5 transition-colors ${
                           isActive
                             ? 'bg-primary/10 ring-1 ring-primary/40 dark:bg-primary/20'
                             : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'
@@ -741,7 +741,7 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                               <button
                                 key={token.id}
                                 type="button"
-                                className="inline-flex items-center rounded px-0.5 py-0.5 text-left transition-all duration-150 ease-out hover:-translate-y-0.5 hover:bg-primary/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:hover:bg-primary/20"
+                                className="relative inline-flex items-center rounded py-0.5 text-left leading-tight transition-all duration-150 ease-out hover:-translate-y-0.5 hover:bg-primary/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:hover:bg-primary/20"
                                 onClick={() => void handleWordClick(sentence, token)}
                                 title={tooltipParts.length ? tooltipParts.join(' • ') : undefined}
                               >
