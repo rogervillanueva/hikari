@@ -70,6 +70,11 @@ async function tryRemoteTokenizer(text: string): Promise<TokenizeResponseToken[]
       return null;
     }
 
+    if (looksLikePerCharacterSegmentation(payload.tokens, text)) {
+      console.warn('[tokenize-ja] remote tokenizer returned low-quality segmentation, falling back');
+      return null;
+    }
+
     return payload.tokens.map((token) => {
       const posList = Array.isArray(token.pos)
         ? token.pos.filter((entry) => !!entry)
@@ -92,6 +97,36 @@ async function tryRemoteTokenizer(text: string): Promise<TokenizeResponseToken[]
     console.error('[tokenize-ja] remote tokenizer failed', error);
     return null;
   }
+}
+
+const JAPANESE_CHAR_REGEX = /[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}]/u;
+
+function looksLikePerCharacterSegmentation(tokens: RemoteTokenPayload[], originalText: string): boolean {
+  const meaningfulTokens = tokens
+    .map((token) => token.surface?.trim() ?? '')
+    .filter((surface) => surface.length > 0);
+
+  if (!meaningfulTokens.length) {
+    return true;
+  }
+
+  const japaneseTokens = meaningfulTokens.filter((surface) => JAPANESE_CHAR_REGEX.test(surface));
+  if (japaneseTokens.length < 4) {
+    return false;
+  }
+
+  const lengths = japaneseTokens.map((surface) => Array.from(surface).length);
+  const totalLength = lengths.reduce((sum, length) => sum + length, 0);
+  const averageLength = totalLength / lengths.length;
+  const singleCharCount = lengths.filter((length) => length === 1).length;
+  const singleCharRatio = singleCharCount / lengths.length;
+
+  if (averageLength > 1.7 && singleCharRatio < 0.6) {
+    return false;
+  }
+
+  const originalJapaneseLength = Array.from(originalText).filter((char) => JAPANESE_CHAR_REGEX.test(char)).length;
+  return originalJapaneseLength > 4;
 }
 
 function segmentWithIntl(text: string): TokenizeResponseToken[] | null {

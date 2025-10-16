@@ -779,8 +779,19 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                 ].filter(Boolean)
               )
             );
+            const normalizedSurface = token.surface?.trim() ?? '';
+            const normalizedBaseForm = typeof baseForm === 'string' ? baseForm.trim() : '';
+            const normalizedConjugationForm =
+              typeof conjugationForm === 'string' ? conjugationForm.trim() : '';
             const showCurrentForm =
-              token.surface !== baseForm || Boolean(conjugationForm || conjugationType || conjugationDescription);
+              normalizedSurface.length > 0 &&
+              normalizedBaseForm.length > 0 &&
+              normalizedSurface !== normalizedBaseForm;
+            const showConjugationDetails = Boolean(
+              (normalizedConjugationForm && normalizedConjugationForm.toLowerCase() !== 'dictionary') ||
+                conjugationType ||
+                conjugationDescription
+            );
             return (
               <div className="w-full max-w-md rounded-lg border border-neutral-300 bg-white p-4 shadow-lg dark:border-neutral-700 dark:bg-neutral-950">
                 <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
@@ -808,14 +819,18 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                   </p>
                 ) : null}
                 <div className="mt-3 space-y-3 text-neutral-800 dark:text-neutral-100">
-                  {showCurrentForm && (
+                  {(showCurrentForm || showConjugationDetails) && (
                     <div>
                       <p className="text-xs uppercase tracking-wide text-neutral-400">Current form</p>
-                      <p className="text-base font-medium">{token.surface}</p>
-                      {(conjugationForm || conjugationType || conjugationDescription) && (
+                      {showCurrentForm && (
+                        <p className="text-base font-medium">{token.surface}</p>
+                      )}
+                      {showConjugationDetails && (
                         <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                          {[conjugationType, conjugationForm, conjugationDescription]
-                            .filter(Boolean)
+                          {[conjugationType, normalizedConjugationForm, conjugationDescription]
+                            .filter((value) =>
+                              typeof value === 'string' ? value.trim().length > 0 : Boolean(value)
+                            )
                             .join(' • ')}
                         </p>
                       )}
@@ -841,9 +856,6 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                   ) : null}
                 </div>
                 <p className="mt-4 text-xs text-neutral-500">
-                  Sentence: {wordPopup.sentence.text_raw}
-                </p>
-                <p className="mt-1 text-xs text-neutral-500">
                   Dictionary provider: {definition?.provider ?? ACTIVE_DICTIONARY_PROVIDER}
                 </p>
                 <div className="mt-4 flex flex-wrap items-center gap-2">
