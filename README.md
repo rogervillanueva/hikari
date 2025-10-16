@@ -89,8 +89,9 @@ grammar metadata. To plug in production services:
    Steps:
 
   - Install the Sudachi WASM bindings in the web app: `pnpm --filter web add
-    sudachi` (or vendor a compatible module and update
-    `SUDACHI_MODULE_CANDIDATES`). If Sudachi is unavailable, the API route
+    sudachi`. If you vendor a different Sudachi-compatible build, set
+    `SUDACHI_MODULE` in `.env.local` to its package name so the loader tries it
+    before the bundled defaults. If Sudachi is unavailable, the API route
     automatically falls back to the bundled Kuromoji tokenizer—install it with
     `pnpm --filter web add kuromoji @types/kuromoji@0.1.3` so the fallback can
     spin up successfully.

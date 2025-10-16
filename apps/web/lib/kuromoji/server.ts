@@ -2,6 +2,8 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import type { TokenizeResponseToken } from '@/workers/tokenize-ja';
 
+type NodeRequire = NodeJS.Require;
+
 const DEFAULT_DIC_PATH = path.join(process.cwd(), 'node_modules/kuromoji/dict');
 
 export class KuromojiUnavailableError extends Error {
@@ -51,21 +53,27 @@ async function ensureTokenizer(): Promise<KuromojiTokenizerLike> {
 
 async function loadTokenizer(): Promise<KuromojiTokenizerLike> {
   const require = createRequire(import.meta.url);
-  let kuromoji: unknown;
-  try {
-    const moduleName = process.env.KUROMOJI_MODULE ?? 'kuromoji';
-    kuromoji = require(moduleName);
-  } catch (error) {
-    if (error instanceof KuromojiUnavailableError) {
-      throw error;
-    }
+  const override = process.env.KUROMOJI_MODULE;
+
+  const results: Array<{ ok: true; module: unknown } | { ok: false; error: unknown }> = [];
+
+  if (override) {
+    results.push(await tryLoadKuromojiOverride(override, require));
+  }
+
+  results.push(await tryLoadKuromojiDefault(require));
+
+  const resolved = results.find((result): result is { ok: true; module: unknown } => result.ok);
+  if (!resolved) {
+    const lastAttempt = results[results.length - 1];
+    const lastError = lastAttempt && !lastAttempt.ok ? lastAttempt.error : undefined;
     throw new KuromojiUnavailableError('kuromoji module is not installed.', [
       'Install it with `pnpm --filter web add kuromoji @types/kuromoji@0.1.3` inside the repo.',
       'If you are using a custom tokenizer, set KUROMOJI_MODULE to its package name.',
-    ], { cause: error });
+    ], { cause: lastError });
   }
 
-  const kuromojiNamespace = (kuromoji as { default?: unknown }).default ?? kuromoji;
+  const kuromojiNamespace = (resolved.module as { default?: unknown }).default ?? resolved.module;
   if (!kuromojiNamespace || typeof (kuromojiNamespace as { builder?: unknown }).builder !== 'function') {
     throw new KuromojiUnavailableError('kuromoji module did not expose a builder function.');
   }
@@ -121,4 +129,45 @@ function mapToken(token: KuromojiTokenLike): TokenizeResponseToken | null {
     features: posDetails,
     isWordLike,
   } satisfies TokenizeResponseToken;
+}
+
+function isRequireEsmError(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && (error as { code?: unknown }).code === 'ERR_REQUIRE_ESM';
+}
+
+async function tryLoadKuromojiOverride(moduleName: string, require: NodeRequire) {
+  try {
+    // eslint-disable-next-line import/no-dynamic-require, @typescript-eslint/no-unsafe-assignment
+    const module = require(moduleName);
+    return { ok: true as const, module };
+  } catch (error) {
+    if (isRequireEsmError(error)) {
+      try {
+        // eslint-disable-next-line import/no-dynamic-require, @typescript-eslint/no-unsafe-assignment
+        const module = await import(/* webpackIgnore: true */ moduleName);
+        return { ok: true as const, module };
+      } catch (innerError) {
+        return { ok: false as const, error: innerError };
+      }
+    }
+    return { ok: false as const, error };
+  }
+}
+
+async function tryLoadKuromojiDefault(require: NodeRequire) {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    const module = require('kuromoji');
+    return { ok: true as const, module };
+  } catch (error) {
+    if (isRequireEsmError(error)) {
+      try {
+        const module = await import('kuromoji');
+        return { ok: true as const, module };
+      } catch (innerError) {
+        return { ok: false as const, error: innerError };
+      }
+    }
+    return { ok: false as const, error };
+  }
 }

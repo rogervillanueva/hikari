@@ -4,7 +4,8 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import type { TokenizeResponseToken } from '@/workers/tokenize-ja';
 
-const SUDACHI_MODULE_CANDIDATES = ['sudachi', '@sudachi/browser', '@sudachi/sudachi'];
+const SUDACHI_DEFAULT_MODULES = ['sudachi', '@sudachi/browser', '@sudachi/sudachi'] as const;
+type NodeRequire = NodeJS.Require;
 const DEFAULT_DICTIONARY_RELATIVE_PATHS = [
   path.join('lib', 'sudachi', 'system_full.dic'),
   path.join('apps', 'web', 'lib', 'sudachi', 'system_full.dic'),
@@ -135,33 +136,118 @@ async function loadDictionaryBytes(dictionaryPath: string): Promise<Uint8Array> 
 
 async function loadSudachiModule(): Promise<unknown> {
   const require = createRequire(import.meta.url);
-  let lastError: unknown;
-  for (const candidate of SUDACHI_MODULE_CANDIDATES) {
-    try {
-      return require(candidate);
-    } catch (error) {
-      lastError = error;
-      if (isRequireEsmError(error)) {
-        try {
-          const module = await import(candidate);
-          return module;
-        } catch (innerError) {
-          lastError = innerError;
-        }
-      }
+  const errors: unknown[] = [];
+
+  const override = process.env.SUDACHI_MODULE;
+  if (override) {
+    const overrideResult = await tryLoadSudachiOverride(override, require);
+    if (overrideResult.ok) {
+      return overrideResult.module;
     }
+    errors.push(overrideResult.error);
   }
+
+  const loaders: Array<() => Promise<{ ok: true; module: unknown } | { ok: false; error: unknown }>> = [
+    () => tryLoadSudachiFromSudachi(require),
+    () => tryLoadSudachiFromBrowser(require),
+    () => tryLoadSudachiFromScoped(require),
+  ];
+
+  for (const load of loaders) {
+    const result = await load();
+    if (result.ok) {
+      return result.module;
+    }
+    errors.push(result.error);
+  }
+
+  const attemptedModules = override
+    ? [override, ...SUDACHI_DEFAULT_MODULES]
+    : [...SUDACHI_DEFAULT_MODULES];
+
   throw new SudachiUnavailableError('Sudachi module is not installed.', {
-    cause: lastError,
+    cause: errors[errors.length - 1],
     help: [
       'Install the WASM bindings by running `pnpm --filter web add sudachi` inside the repo.',
-      'If you are vendoring another Sudachi-compatible module, update SUDACHI_MODULE_CANDIDATES in apps/web/lib/sudachi/server.ts.',
+      'If you are vendoring another Sudachi-compatible module, set SUDACHI_MODULE to its package name.',
     ],
+    context: { attemptedModules },
   });
 }
 
 function isRequireEsmError(error: unknown): boolean {
   return error instanceof Error && 'code' in error && (error as { code?: unknown }).code === 'ERR_REQUIRE_ESM';
+}
+
+async function tryLoadSudachiOverride(moduleName: string, require: NodeRequire) {
+  try {
+    return { ok: true as const, module: require(moduleName) };
+  } catch (error) {
+    if (isRequireEsmError(error)) {
+      try {
+        // eslint-disable-next-line import/no-dynamic-require, @typescript-eslint/no-unsafe-assignment
+        const module = await import(/* webpackIgnore: true */ moduleName);
+        return { ok: true as const, module };
+      } catch (innerError) {
+        return { ok: false as const, error: innerError };
+      }
+    }
+    return { ok: false as const, error };
+  }
+}
+
+async function tryLoadSudachiFromSudachi(require: NodeRequire) {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    const module = require('sudachi');
+    return { ok: true as const, module };
+  } catch (error) {
+    if (isRequireEsmError(error)) {
+      try {
+        const module = await import('sudachi');
+        return { ok: true as const, module };
+      } catch (innerError) {
+        return { ok: false as const, error: innerError };
+      }
+    }
+    return { ok: false as const, error };
+  }
+}
+
+async function tryLoadSudachiFromBrowser(require: NodeRequire) {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    const module = require('@sudachi/browser');
+    return { ok: true as const, module };
+  } catch (error) {
+    if (isRequireEsmError(error)) {
+      try {
+        const module = await import('@sudachi/browser');
+        return { ok: true as const, module };
+      } catch (innerError) {
+        return { ok: false as const, error: innerError };
+      }
+    }
+    return { ok: false as const, error };
+  }
+}
+
+async function tryLoadSudachiFromScoped(require: NodeRequire) {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    const module = require('@sudachi/sudachi');
+    return { ok: true as const, module };
+  } catch (error) {
+    if (isRequireEsmError(error)) {
+      try {
+        const module = await import('@sudachi/sudachi');
+        return { ok: true as const, module };
+      } catch (innerError) {
+        return { ok: false as const, error: innerError };
+      }
+    }
+    return { ok: false as const, error };
+  }
 }
 
 async function instantiateTokenizer(
