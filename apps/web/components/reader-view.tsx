@@ -87,9 +87,25 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   useEffect(() => {
     const unsubscribe = subscribeToMorphologyDiagnostics((diagnostic) => {
       setMorphologyDiagnostics((prev) => {
-        if (prev.some((item) => item.level === diagnostic.level && item.message === diagnostic.message)) {
-          return prev;
+        const existingIndex = prev.findIndex(
+          (item) => item.level === diagnostic.level && item.message === diagnostic.message
+        );
+
+        if (existingIndex !== -1) {
+          const existing = prev[existingIndex];
+          const updated: QueuedMorphologyDiagnostic = {
+            ...existing,
+            ...diagnostic,
+            id: existing.id,
+          };
+
+          return [
+            ...prev.slice(0, existingIndex),
+            updated,
+            ...prev.slice(existingIndex + 1),
+          ];
         }
+
         diagnosticsIdRef.current += 1;
         return [...prev, { ...diagnostic, id: diagnosticsIdRef.current }];
       });
