@@ -34,7 +34,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ tokens, source, diagnostics });
   } catch (error) {
     if (error instanceof SudachiUnavailableError) {
-      return NextResponse.json({ error: error.message, help: error.help }, { status: 503 });
+      return NextResponse.json(
+        { error: error.message, help: error.help, context: error.context },
+        { status: 503 },
+      );
     }
     console.error('[api/morphology] unexpected error', error);
     return NextResponse.json({ error: 'Failed to tokenize text.' }, { status: 500 });

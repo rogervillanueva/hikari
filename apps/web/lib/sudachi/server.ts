@@ -13,8 +13,12 @@ const SUDACHI_SPLIT_MODE = (process.env.SUDACHI_SPLIT_MODE ?? 'C').toUpperCase()
 
 export class SudachiUnavailableError extends Error {
   readonly help: string[];
+  readonly context?: Record<string, unknown>;
 
-  constructor(message: string, options?: { cause?: unknown; help?: string[] }) {
+  constructor(
+    message: string,
+    options?: { cause?: unknown; help?: string[]; context?: Record<string, unknown> },
+  ) {
     super(message);
     this.name = 'SudachiUnavailableError';
     if (options?.cause) {
@@ -22,6 +26,7 @@ export class SudachiUnavailableError extends Error {
       (this as { cause?: unknown }).cause = options.cause;
     }
     this.help = options?.help ?? [];
+    this.context = options?.context;
   }
 }
 

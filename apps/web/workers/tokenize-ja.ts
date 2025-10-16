@@ -1,3 +1,4 @@
+import { buildDiagnosticLog, serializeError } from '@/lib/morphology/diagnostics';
 import type { PitchInfo } from '@/lib/types';
 
 export interface TokenizeRequest {
@@ -33,6 +34,8 @@ export interface MorphologyDiagnostic {
   message: string;
   help?: string[];
   source?: string;
+  log?: string;
+  timestamp?: string;
 }
 
 type MorphologyDiagnosticsListener = (diagnostic: MorphologyDiagnostic) => void;
@@ -99,14 +102,26 @@ async function tryRemoteTokenizer(text: string): Promise<TokenizeResponseToken[]
     });
 
     if (!response.ok) {
-      let details: { error?: string; help?: string[] } | null = null;
+      let details: { error?: string; help?: string[]; context?: unknown } | null = null;
       try {
-        details = (await response.json()) as { error?: string; help?: string[] } | null;
+        details = (await response.json()) as {
+          error?: string;
+          help?: string[];
+          context?: unknown;
+        } | null;
       } catch (error) {
         // Ignore body parsing errors and fall back to a generic message.
       }
       const message = details?.error ?? `Remote tokenizer returned status ${response.status}.`;
-      recordRemoteFailure(message, details?.help, { level: 'error', source: 'remote' });
+      recordRemoteFailure(message, details?.help, {
+        level: 'error',
+        source: 'remote',
+        context: {
+          status: response.status,
+          endpoint: MORPHOLOGY_ENDPOINT ?? '(not set)',
+          response: details,
+        },
+      });
       console.warn('[tokenize-ja] remote tokenizer returned', response.status);
       return null;
     }
@@ -127,6 +142,11 @@ async function tryRemoteTokenizer(text: string): Promise<TokenizeResponseToken[]
         undefined,
         {
           source: payload?.source ?? 'remote',
+          context: {
+            endpoint: MORPHOLOGY_ENDPOINT ?? '(not set)',
+            receivedTokenCount: payload?.tokens?.length ?? 0,
+            diagnostics: payload?.diagnostics ?? [],
+          },
         },
       );
       return null;
@@ -137,7 +157,14 @@ async function tryRemoteTokenizer(text: string): Promise<TokenizeResponseToken[]
       recordRemoteFailure(
         'Remote tokenizer returned low-quality segmentation. Falling back to heuristics.',
         [...(payload?.diagnostics?.flatMap((diagnostic) => diagnostic.help ?? []) ?? [])],
-        { source: payload?.source ?? 'remote' },
+        {
+          source: payload?.source ?? 'remote',
+          context: {
+            endpoint: MORPHOLOGY_ENDPOINT ?? '(not set)',
+            tokenCount: payload.tokens.length,
+            tokenPreview: payload.tokens.slice(0, 12).map((token) => token.surface).join(' '),
+          },
+        },
       );
       return null;
     }
@@ -168,7 +195,14 @@ async function tryRemoteTokenizer(text: string): Promise<TokenizeResponseToken[]
     recordRemoteFailure(
       'Failed to reach remote tokenizer. Falling back to heuristics.',
       [error instanceof Error ? error.message : String(error)],
-      { level: 'error', source: 'remote' },
+      {
+        level: 'error',
+        source: 'remote',
+        context: {
+          endpoint: MORPHOLOGY_ENDPOINT ?? '(not set)',
+          error: serializeError(error),
+        },
+      },
     );
     return null;
   }
@@ -177,21 +211,42 @@ async function tryRemoteTokenizer(text: string): Promise<TokenizeResponseToken[]
 function recordRemoteFailure(
   message: string,
   help?: string[],
-  options?: { level?: MorphologyDiagnostic['level']; source?: string },
+  options?: {
+    level?: MorphologyDiagnostic['level'];
+    source?: string;
+    context?: Record<string, unknown>;
+  },
 ) {
-  consecutiveRemoteFailures = Math.min(consecutiveRemoteFailures + 1, REMOTE_FAILURE_BACKOFFS_MS.length);
-  const backoffIndex = Math.min(consecutiveRemoteFailures - 1, REMOTE_FAILURE_BACKOFFS_MS.length - 1);
+  const nextFailureCount = Math.min(consecutiveRemoteFailures + 1, REMOTE_FAILURE_BACKOFFS_MS.length);
+  const backoffIndex = Math.min(nextFailureCount - 1, REMOTE_FAILURE_BACKOFFS_MS.length - 1);
   const delay = REMOTE_FAILURE_BACKOFFS_MS[backoffIndex] ?? REMOTE_FAILURE_BACKOFFS_MS[0];
-  remoteUnavailableUntil = Date.now() + delay;
+  const now = Date.now();
+  remoteUnavailableUntil = now + delay;
+  consecutiveRemoteFailures = nextFailureCount;
   const seconds = Math.max(1, Math.round(delay / 1000));
   const helpMessages = [...(help ?? []), `Retrying remote tokenizer in ${seconds} seconds.`].filter(
     (entry): entry is string => typeof entry === 'string' && entry.length > 0,
   );
+  const timestamp = new Date(now).toISOString();
+  const log = buildDiagnosticLog({
+    message,
+    help: helpMessages,
+    source: options?.source ?? 'remote',
+    timestamp,
+    details: {
+      failureCount: nextFailureCount,
+      backoffMs: delay,
+      nextRetryAt: new Date(remoteUnavailableUntil).toISOString(),
+      ...(options?.context ?? {}),
+    },
+  });
   emitMorphologyDiagnostic({
     level: options?.level ?? 'warning',
     message,
     help: helpMessages,
     source: options?.source,
+    log,
+    timestamp,
   });
 }
 

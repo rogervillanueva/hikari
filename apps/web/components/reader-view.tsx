@@ -52,6 +52,7 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [morphologyDiagnostics, setMorphologyDiagnostics] = useState<QueuedMorphologyDiagnostic[]>([]);
   const diagnosticsIdRef = useRef(0);
+  const [copiedDiagnosticId, setCopiedDiagnosticId] = useState<number | null>(null);
 
   const document = useMemo(
     () => documents.find((doc) => doc.id === documentId),
@@ -96,8 +97,45 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     return unsubscribe;
   }, [subscribeToMorphologyDiagnostics]);
 
+  useEffect(() => {
+    if (copiedDiagnosticId === null) {
+      return;
+    }
+    const timeout = setTimeout(() => {
+      setCopiedDiagnosticId(null);
+    }, 2000);
+    return () => clearTimeout(timeout);
+  }, [copiedDiagnosticId]);
+
   const dismissMorphologyDiagnostic = useCallback((id: number) => {
     setMorphologyDiagnostics((prev) => prev.filter((item) => item.id !== id));
+  }, []);
+
+  const handleCopyDiagnostic = useCallback(async (id: number, content: string) => {
+    if (!content) {
+      return;
+    }
+    try {
+      if (typeof window === 'undefined') {
+        return;
+      }
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(content);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = content;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'absolute';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopiedDiagnosticId(id);
+    } catch (error) {
+      console.error('[reader] Failed to copy morphology diagnostic log', error);
+    }
   }, []);
 
   const paragraphs = useMemo(() => {
@@ -930,6 +968,12 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                 : diagnostic.level === 'warning'
                 ? 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100'
                 : 'border-blue-300 bg-blue-50 text-blue-900 dark:border-blue-500/60 dark:bg-blue-950/50 dark:text-blue-100';
+            const fallbackLogParts = [
+              diagnostic.timestamp ? `timestamp: ${diagnostic.timestamp}` : null,
+              diagnostic.message ? `message: ${diagnostic.message}` : null,
+              ...(diagnostic.help ?? []),
+            ].filter((part): part is string => !!part);
+            const logContent = diagnostic.log ?? fallbackLogParts.join('\n');
             return (
               <div
                 key={diagnostic.id}
@@ -941,6 +985,11 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                       {diagnostic.message}
                       {diagnostic.source ? ` (${diagnostic.source})` : ''}
                     </p>
+                    {diagnostic.timestamp ? (
+                      <p className="text-[11px] font-mono uppercase tracking-wide opacity-75">
+                        {diagnostic.timestamp}
+                      </p>
+                    ) : null}
                     {diagnostic.help && diagnostic.help.length > 0 && (
                       <ul className="list-inside list-disc space-y-0.5 text-xs opacity-90">
                         {diagnostic.help.map((hint, index) => (
@@ -949,15 +998,34 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                       </ul>
                     )}
                   </div>
-                  <button
-                    type="button"
-                    className="-m-1 rounded-full p-1 text-xs text-current transition-opacity hover:opacity-70"
-                    aria-label="Dismiss morphology warning"
-                    onClick={() => dismissMorphologyDiagnostic(diagnostic.id)}
-                  >
-                    ×
-                  </button>
+                  <div className="flex flex-col items-end gap-1">
+                    <button
+                      type="button"
+                      className="rounded bg-black/10 px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-current transition hover:bg-black/20 dark:bg-white/10 dark:hover:bg-white/20"
+                      onClick={() => handleCopyDiagnostic(diagnostic.id, logContent)}
+                    >
+                      Copy
+                    </button>
+                    <button
+                      type="button"
+                      className="-m-1 rounded-full p-1 text-xs text-current transition-opacity hover:opacity-70"
+                      aria-label="Dismiss morphology warning"
+                      onClick={() => dismissMorphologyDiagnostic(diagnostic.id)}
+                    >
+                      ×
+                    </button>
+                  </div>
                 </div>
+                {logContent ? (
+                  <pre className="mt-2 max-h-48 overflow-auto rounded-md bg-black/10 p-2 text-[11px] leading-relaxed text-current dark:bg-white/10">
+                    {logContent}
+                  </pre>
+                ) : null}
+                {copiedDiagnosticId === diagnostic.id ? (
+                  <p className="mt-2 text-[10px] font-semibold uppercase tracking-wide opacity-80">
+                    Copied log to clipboard
+                  </p>
+                ) : null}
               </div>
             );
           })}
