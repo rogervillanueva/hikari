@@ -1,14 +1,16 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Ellipsis, Play, Pause } from 'lucide-react';
-import { ACTIVE_PROVIDER } from '@/lib/config';
+import { Ellipsis, Pause, Play } from 'lucide-react';
+import { ACTIVE_DICTIONARY_PROVIDER, ACTIVE_TTS_PROVIDER } from '@/lib/config';
+import { readerConfig } from '@/config/reader';
 import { useDocumentsStore } from '@/store/documents';
 import { getDictionaryProvider } from '@/providers/dictionary/mock';
-import { getTranslationProvider } from '@/providers/translation/mock';
 import { getTtsProvider } from '@/providers/tts';
 import type { Sentence } from '@/lib/types';
+import type { TranslationDirection } from '@/providers/translation/base';
+import { translateSentences } from '@/utils/translateSentences';
 
 interface ReaderViewProps {
   documentId: string;
@@ -23,13 +25,45 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   const playingRef = useRef(false);
   const [sentenceTranslations, setSentenceTranslations] = useState<Record<number, string>>({});
   const [openSentenceTranslations, setOpenSentenceTranslations] = useState<Record<number, boolean>>({});
-  const [wordPopup, setWordPopup] = useState<{ sentence: Sentence; token: string; definition: string } | null>(null);
+  const [pageTranslations, setPageTranslations] = useState<Record<number, Record<string, string>>>({});
+  const [loadingPages, setLoadingPages] = useState<Record<number, boolean>>({});
+  const [wordPopup, setWordPopup] = useState<{
+    sentence: Sentence;
+    token: string;
+    definition: string;
+  } | null>(null);
+  const [pageIndex, setPageIndex] = useState(0);
 
-  const document = useMemo(() => documents.find((doc) => doc.id === documentId), [documents, documentId]);
+  const document = useMemo(
+    () => documents.find((doc) => doc.id === documentId),
+    [documents, documentId]
+  );
   const sentenceList = sentencesByDoc[documentId] ?? [];
+  const sentencesPerPage = readerConfig.sentencesPerPage;
+
+  useEffect(() => {
+    void loadDocuments();
+  }, [loadDocuments]);
+
+  useEffect(() => {
+    if (!document && documents.length) {
+      router.replace('/documents');
+    }
+  }, [document, documents.length, router]);
+
+  useEffect(() => {
+    setPageIndex(0);
+    setSentenceTranslations({});
+    setOpenSentenceTranslations({});
+    setPageTranslations({});
+    setLoadingPages({});
+  }, [documentId]);
+
   const paragraphs = useMemo(() => {
     if (!sentenceList.length) return [] as Sentence[][];
-    const hasParagraphData = sentenceList.some((sentence) => typeof sentence.paragraphIndex === 'number');
+    const hasParagraphData = sentenceList.some(
+      (sentence) => typeof sentence.paragraphIndex === 'number'
+    );
     if (!hasParagraphData) {
       return sentenceList.map((sentence) => [sentence]);
     }
@@ -52,15 +86,144 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     return groups;
   }, [sentenceList]);
 
-  useEffect(() => {
-    void loadDocuments();
-  }, [loadDocuments]);
+  const pages = useMemo(() => {
+    if (!paragraphs.length) {
+      return [] as Sentence[][][];
+    }
+
+    const result: Sentence[][][] = [];
+    let currentPage: Sentence[][] = [];
+    let currentCount = 0;
+
+    const pushCurrentPage = () => {
+      if (currentPage.length) {
+        result.push(currentPage);
+        currentPage = [];
+        currentCount = 0;
+      }
+    };
+
+    paragraphs.forEach((paragraph) => {
+      let remaining = [...paragraph];
+      while (remaining.length) {
+        const remainingSlots = sentencesPerPage - currentCount;
+        if (remainingSlots <= 0) {
+          pushCurrentPage();
+          continue;
+        }
+
+        if (remaining.length <= remainingSlots) {
+          currentPage.push(remaining);
+          currentCount += remaining.length;
+          remaining = [];
+        } else {
+          const chunk = remaining.slice(0, remainingSlots);
+          currentPage.push(chunk);
+          pushCurrentPage();
+          remaining = remaining.slice(remainingSlots);
+        }
+      }
+    });
+
+    pushCurrentPage();
+
+    return result.length ? result : [paragraphs];
+  }, [paragraphs, sentencesPerPage]);
+
+  const totalPages = pages.length;
+  const currentPage = pages[pageIndex] ?? [];
 
   useEffect(() => {
-    if (!document && documents.length) {
-      router.replace('/documents');
+    if (pageIndex >= totalPages && totalPages > 0) {
+      setPageIndex(totalPages - 1);
     }
-  }, [document, documents.length, router]);
+  }, [pageIndex, totalPages]);
+
+  const sentenceToPageIndex = useMemo(() => {
+    const map = new Map<number, number>();
+    pages.forEach((page, index) => {
+      page.forEach((paragraph) => {
+        paragraph.forEach((sentence) => {
+          map.set(sentence.index, index);
+        });
+      });
+    });
+    return map;
+  }, [pages]);
+
+  const sourceLanguage = document?.lang_source ?? 'ja';
+  const direction: TranslationDirection = sourceLanguage === 'en' ? 'en-ja' : 'ja-en';
+
+  const ensurePageTranslations = useCallback(
+    async (targetPage: number) => {
+      if (!document) {
+        return;
+      }
+      if (targetPage < 0 || targetPage >= pages.length) {
+        return;
+      }
+      if (pageTranslations[targetPage] || loadingPages[targetPage]) {
+        return;
+      }
+
+      const page = pages[targetPage];
+      const sentencesForPage = page.flat();
+      if (!sentencesForPage.length) {
+        setPageTranslations((prev) => ({ ...prev, [targetPage]: {} }));
+        return;
+      }
+
+      setLoadingPages((prev) => ({ ...prev, [targetPage]: true }));
+      try {
+        const { translations } = await translateSentences({
+          sentences: sentencesForPage.map((sentence) => ({
+            id: sentence.id,
+            text: sentence.text_raw,
+          })),
+          direction,
+          documentId: document.id,
+        });
+
+        setPageTranslations((prev) => ({ ...prev, [targetPage]: translations }));
+        setSentenceTranslations((prev) => {
+          const updates: Record<number, string> = {};
+          sentencesForPage.forEach((sentence) => {
+            const translated = translations[sentence.id];
+            if (translated) {
+              updates[sentence.index] = translated;
+            }
+          });
+          if (!Object.keys(updates).length) {
+            return prev;
+          }
+          return { ...prev, ...updates };
+        });
+      } catch (error) {
+        console.error('Failed to translate page', error);
+      } finally {
+        setLoadingPages((prev) => {
+          const next = { ...prev };
+          delete next[targetPage];
+          return next;
+        });
+      }
+    },
+    [document, direction, loadingPages, pageTranslations, pages]
+  );
+
+  useEffect(() => {
+    if (!pages.length) {
+      return;
+    }
+    void ensurePageTranslations(pageIndex);
+    const prefetchWindow = readerConfig.translationPrefetchPages;
+    for (let offset = 1; offset <= prefetchWindow; offset += 1) {
+      const target = pageIndex + offset;
+      if (target < pages.length) {
+        void ensurePageTranslations(target);
+      }
+    }
+  }, [pageIndex, pages.length, ensurePageTranslations]);
 
   const handleToggleSentenceTranslation = async (sentence: Sentence) => {
     const willOpen = !openSentenceTranslations[sentence.index];
@@ -68,31 +231,15 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     if (!willOpen) {
       return;
     }
-    if (sentenceTranslations[sentence.index]) {
-      return;
+    const owningPageIndex = sentenceToPageIndex.get(sentence.index);
+    if (typeof owningPageIndex === 'number') {
+      await ensurePageTranslations(owningPageIndex);
     }
-    const provider = getTranslationProvider(ACTIVE_PROVIDER);
-    const sourceLanguage = document?.lang_source ?? 'ja';
-    const targetLanguage = sourceLanguage === 'ja' ? 'en' : 'ja';
-    const options =
-      targetLanguage === 'ja'
-        ? {
-            instructions:
-              'Translate the passage into natural, contextually rich Japanese that preserves narrative flow and uses idiomatic expressions appropriate to Tokyo standard Japanese when suitable.',
-          }
-        : undefined;
-    const [translation] = await provider.translateSentences(
-      [sentence.text_raw],
-      sourceLanguage,
-      targetLanguage,
-      options
-    );
-    setSentenceTranslations((prev) => ({ ...prev, [sentence.index]: translation }));
   };
 
   const playSentence = async (index: number, sentence: Sentence) => {
     setActiveSentence(index);
-    const provider = getTtsProvider(ACTIVE_PROVIDER);
+    const provider = getTtsProvider(ACTIVE_TTS_PROVIDER);
     const result = await provider.speakSentence(sentence.text_raw, 'ja');
     const url = await provider.getAudioUrl(result.audioId);
     const audio = new Audio(url);
@@ -118,7 +265,7 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   };
 
   const handleWordClick = async (sentence: Sentence, token: string) => {
-    const dictionary = getDictionaryProvider(ACTIVE_PROVIDER);
+    const dictionary = getDictionaryProvider(ACTIVE_DICTIONARY_PROVIDER);
     const definitions = await dictionary.lookup(token, 'ja', { sentence: sentence.text_raw });
     setWordPopup({ sentence, token, definition: definitions[0]?.senses[0] ?? token });
   };
@@ -128,6 +275,9 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   }
 
   const includeSentenceSpacing = document.lang_source === 'en';
+  const isCurrentPageLoading = loadingPages[pageIndex] ?? false;
+  const canGoPrev = pageIndex > 0;
+  const canGoNext = pageIndex < totalPages - 1;
 
   return (
     <div className="flex flex-col gap-4">
@@ -153,8 +303,31 @@ export function ReaderView({ documentId }: ReaderViewProps) {
           </button>
         </div>
       </header>
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white p-3 text-sm shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
+        <button
+          type="button"
+          className="rounded-md border border-neutral-300 px-3 py-1.5 font-medium text-neutral-700 transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:border-neutral-200 disabled:text-neutral-400 dark:border-neutral-700 dark:text-neutral-200 dark:hover:border-primary dark:hover:text-primary dark:disabled:border-neutral-800 dark:disabled:text-neutral-600"
+          onClick={() => setPageIndex((prev) => Math.max(prev - 1, 0))}
+          disabled={!canGoPrev}
+        >
+          Previous
+        </button>
+        <div className="flex flex-col text-center sm:flex-row sm:items-center sm:gap-2">
+          <span className="font-medium">Page {totalPages ? pageIndex + 1 : 0}</span>
+          <span className="text-neutral-500 dark:text-neutral-400">of {totalPages}</span>
+          {isCurrentPageLoading && <span className="text-xs text-primary">Translating…</span>}
+        </div>
+        <button
+          type="button"
+          className="rounded-md border border-neutral-300 px-3 py-1.5 font-medium text-neutral-700 transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:border-neutral-200 disabled:text-neutral-400 dark:border-neutral-700 dark:text-neutral-200 dark:hover:border-primary dark:hover:text-primary dark:disabled:border-neutral-800 dark:disabled:text-neutral-600"
+          onClick={() => setPageIndex((prev) => Math.min(prev + 1, totalPages - 1))}
+          disabled={!canGoNext}
+        >
+          Next
+        </button>
+      </div>
       <section className="space-y-6">
-        {paragraphs.map((paragraph, paragraphIndex) => (
+        {currentPage.map((paragraph, paragraphIndex) => (
           <article
             key={`paragraph-${paragraphIndex}`}
             className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm transition-colors dark:border-neutral-800 dark:bg-neutral-900"
@@ -163,6 +336,10 @@ export function ReaderView({ documentId }: ReaderViewProps) {
               {paragraph.map((sentence, sentenceIndex) => {
                 const isActive = activeSentence === sentence.index;
                 const isTranslationOpen = openSentenceTranslations[sentence.index];
+                const owningPageIndex = sentenceToPageIndex.get(sentence.index);
+                const pageIsLoading =
+                  typeof owningPageIndex === 'number' ? loadingPages[owningPageIndex] : false;
+                const translationText = sentenceTranslations[sentence.index];
                 return (
                   <span key={sentence.id} className="inline-block align-baseline">
                     <span className="inline-flex items-center gap-2 align-baseline">
@@ -208,7 +385,7 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                     </span>
                     {isTranslationOpen && (
                       <span className="mt-2 block rounded-md bg-neutral-100 p-3 text-sm text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
-                        {sentenceTranslations[sentence.index] ?? 'Translating…'}
+                        {translationText ?? (pageIsLoading ? 'Translating…' : 'Translation unavailable')}
                       </span>
                     )}
                     {includeSentenceSpacing && sentenceIndex < paragraph.length - 1 && <span> </span>}
