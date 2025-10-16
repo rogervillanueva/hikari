@@ -53,6 +53,7 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   const [morphologyDiagnostics, setMorphologyDiagnostics] = useState<QueuedMorphologyDiagnostic[]>([]);
   const diagnosticsIdRef = useRef(0);
   const [copiedDiagnosticId, setCopiedDiagnosticId] = useState<number | null>(null);
+  const [downloadingLogs, setDownloadingLogs] = useState(false);
 
   const document = useMemo(
     () => documents.find((doc) => doc.id === documentId),
@@ -127,6 +128,16 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     setMorphologyDiagnostics((prev) => prev.filter((item) => item.id !== id));
   }, []);
 
+  const pushDiagnosticsMessage = useCallback(
+    (diagnostic: MorphologyDiagnostic) => {
+      setMorphologyDiagnostics((prev) => {
+        diagnosticsIdRef.current += 1;
+        return [...prev, { ...diagnostic, id: diagnosticsIdRef.current }];
+      });
+    },
+    [setMorphologyDiagnostics],
+  );
+
   const handleCopyDiagnostic = useCallback(async (id: number, content: string) => {
     if (!content) {
       return;
@@ -153,6 +164,83 @@ export function ReaderView({ documentId }: ReaderViewProps) {
       console.error('[reader] Failed to copy morphology diagnostic log', error);
     }
   }, []);
+
+  const handleDownloadLogs = useCallback(async () => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      setDownloadingLogs(true);
+      const headers: HeadersInit = {};
+      const apiKey = process.env.NEXT_PUBLIC_SERVER_LOG_API_KEY;
+      if (apiKey) {
+        headers['x-api-key'] = apiKey;
+      }
+      const response = await fetch('/api/logs/latest', { headers });
+      if (!response.ok) {
+        const cloned = response.clone();
+        const helpMessages: string[] = [`Request failed with status ${response.status}`];
+        let logContent: string | undefined;
+        try {
+          const data = await response.json();
+          if (data && typeof data === 'object' && 'error' in data && typeof (data as { error?: unknown }).error === 'string') {
+            helpMessages.unshift(String((data as { error?: unknown }).error));
+          }
+          logContent = JSON.stringify(data, null, 2);
+        } catch {
+          try {
+            const text = await cloned.text();
+            if (text) {
+              helpMessages.unshift(text);
+              logContent = text;
+            }
+          } catch (innerError) {
+            logContent = innerError instanceof Error ? innerError.message : String(innerError);
+          }
+        }
+        pushDiagnosticsMessage({
+          level: 'error',
+          message: 'Failed to download server logs.',
+          source: 'logs',
+          help: helpMessages,
+          log: logContent,
+          timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      const blob = await response.blob();
+      const disposition = response.headers.get('content-disposition') ?? '';
+      const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
+      const filename = filenameMatch ? filenameMatch[1] : 'server-log.txt';
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      pushDiagnosticsMessage({
+        level: 'info',
+        message: 'Downloaded server log file.',
+        source: 'logs',
+        help: [`Saved as ${filename}`],
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      pushDiagnosticsMessage({
+        level: 'error',
+        message: 'Failed to download server logs.',
+        source: 'logs',
+        help: ['Check the log output below for details.'],
+        log: error instanceof Error ? error.stack ?? error.message : String(error),
+        timestamp: new Date().toISOString(),
+      });
+    } finally {
+      setDownloadingLogs(false);
+    }
+  }, [pushDiagnosticsMessage]);
 
   const paragraphs = useMemo(() => {
     if (!sentenceList.length) return [] as Sentence[][];
@@ -975,9 +1063,16 @@ export function ReaderView({ documentId }: ReaderViewProps) {
         </div>
       )}
       </div>
-      {morphologyDiagnostics.length > 0 && (
-        <div className="fixed right-4 top-4 z-50 flex max-w-sm flex-col gap-3">
-          {morphologyDiagnostics.map((diagnostic) => {
+      <div className="fixed right-4 top-4 z-50 flex max-w-sm flex-col gap-3">
+        <button
+          type="button"
+          className="rounded-md border border-neutral-300 bg-white/80 px-3 py-2 text-xs font-medium uppercase tracking-wide text-neutral-700 shadow-sm transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-900/80 dark:text-neutral-100"
+          onClick={() => void handleDownloadLogs()}
+          disabled={downloadingLogs}
+        >
+          {downloadingLogs ? 'Preparing logs…' : 'Download server logs'}
+        </button>
+        {morphologyDiagnostics.map((diagnostic) => {
             const toneClasses =
               diagnostic.level === 'error'
                 ? 'border-red-300 bg-red-50 text-red-900 dark:border-red-600/60 dark:bg-red-950/60 dark:text-red-100'
@@ -1045,8 +1140,7 @@ export function ReaderView({ documentId }: ReaderViewProps) {
               </div>
             );
           })}
-        </div>
-      )}
+      </div>
     </>
   );
 }

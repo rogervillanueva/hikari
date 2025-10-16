@@ -1,3 +1,4 @@
+import { logServerEvent } from '@/lib/logging/server';
 import { tokenizeWithFallback } from '@/lib/morphology/fallback';
 import { buildDiagnosticLog, serializeError } from '@/lib/morphology/diagnostics';
 import { KuromojiUnavailableError, tokenizeWithKuromoji } from '@/lib/kuromoji/server';
@@ -28,6 +29,12 @@ export async function tokenizeJapaneseServer(text: string): Promise<MorphologyRe
 
   try {
     const tokens = await tokenizeWithSudachi(text);
+    await logServerEvent({
+      level: 'info',
+      category: 'morphology',
+      message: 'Tokenised text with Sudachi.',
+      details: { tokenCount: tokens.length, textLength: text.length },
+    });
     return { tokens, source: 'sudachi', diagnostics };
   } catch (error) {
     if (error instanceof SudachiUnavailableError) {
@@ -51,6 +58,16 @@ export async function tokenizeJapaneseServer(text: string): Promise<MorphologyRe
           },
         }),
       });
+      await logServerEvent({
+        level: 'warn',
+        category: 'morphology',
+        message: 'Sudachi tokenizer unavailable. Falling back to Kuromoji.',
+        details: {
+          help: error.help,
+          attemptedModules: error.context?.attemptedModules ?? null,
+          error: serializeError(error),
+        },
+      });
     } else {
       throw error;
     }
@@ -58,6 +75,12 @@ export async function tokenizeJapaneseServer(text: string): Promise<MorphologyRe
 
   try {
     const tokens = await tokenizeWithKuromoji(text);
+    await logServerEvent({
+      level: 'info',
+      category: 'morphology',
+      message: 'Tokenised text with Kuromoji.',
+      details: { tokenCount: tokens.length, textLength: text.length },
+    });
     return { tokens, source: 'kuromoji', diagnostics };
   } catch (error) {
     if (error instanceof KuromojiUnavailableError) {
@@ -79,6 +102,16 @@ export async function tokenizeJapaneseServer(text: string): Promise<MorphologyRe
             error: serializeError(error),
           },
         }),
+      });
+      await logServerEvent({
+        level: 'error',
+        category: 'morphology',
+        message: 'Kuromoji fallback tokenizer unavailable.',
+        details: {
+          help: error.help,
+          module: process.env.KUROMOJI_MODULE ?? 'kuromoji',
+          error: serializeError(error),
+        },
       });
     } else {
       throw error;
@@ -109,6 +142,17 @@ export async function tokenizeJapaneseServer(text: string): Promise<MorphologyRe
         kuromoji: kuromojiError ? serializeError(kuromojiError) : null,
       },
     }),
+  });
+
+  await logServerEvent({
+    level: 'warn',
+    category: 'morphology',
+    message: 'No morphology tokenizer available. Using heuristic fallback.',
+    details: {
+      textLength: text.length,
+      sudachiError: sudachiError ? serializeError(sudachiError) : null,
+      kuromojiError: kuromojiError ? serializeError(kuromojiError) : null,
+    },
   });
 
   return { tokens: fallbackTokens, source: 'fallback', diagnostics };

@@ -101,6 +101,12 @@ grammar metadata. To plug in production services:
    - Restart `pnpm dev` so the API route can initialise the tokenizer.
    - Re-import or trigger the retokenisation workflow for existing documents to
      refresh stored tokens with Sudachi output.
+   - The morphology API and diagnostics toast now mirror the same events in
+     `apps/web/.logs/server-YYYY-MM-DD.log` (or the directory specified by
+     `SERVER_LOG_DIR`). Use the **Download server logs** button in the reader’s
+     diagnostics toast or call `GET /api/logs/latest` (include the optional
+     `SERVER_LOG_API_KEY` header when configured) to retrieve a text copy you can
+     share for debugging.
 
    Prefer a different analyzer (SudachiPy, Kuromoji, MeCab, etc.)? Expose it via
    an HTTP endpoint that returns the same token payload and update

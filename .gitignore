@@ -9,6 +9,7 @@ dist
 .env.*
 !**/.env.local.example
 *.log
+apps/web/.logs/
 
 # binaries (Codex PR safe)
 *.png
