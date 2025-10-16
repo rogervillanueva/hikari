@@ -88,9 +88,9 @@ grammar metadata. To plug in production services:
 
    Steps:
 
-   - Install the Sudachi WASM bindings in the web app: `pnpm --filter web add
-     @sudachi/sudachi` (or vendor a compatible module and update
-     `SUDACHI_MODULE_CANDIDATES`).
+  - Install the Sudachi WASM bindings in the web app: `pnpm --filter web add
+    sudachi` (or vendor a compatible module and update
+    `SUDACHI_MODULE_CANDIDATES`).
    - Download the latest Sudachi Full dictionary and place the extracted
      `system_full.dic` under `apps/web/lib/sudachi/` (the directory is gitignored)
      or set `SUDACHI_DICTIONARY_PATH` to its location.

@@ -3,7 +3,7 @@ import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import type { TokenizeResponseToken } from '@/workers/tokenize-ja';
 
-const SUDACHI_MODULE_CANDIDATES = ['@sudachi/sudachi', 'sudachi'];
+const SUDACHI_MODULE_CANDIDATES = ['sudachi', '@sudachi/browser', '@sudachi/sudachi'];
 const DEFAULT_DICTIONARY_PATH = path.join(process.cwd(), 'apps/web/lib/sudachi/system_full.dic');
 const SUDACHI_SPLIT_MODE = (process.env.SUDACHI_SPLIT_MODE ?? 'C').toUpperCase();
 
@@ -61,7 +61,7 @@ async function loadSudachiTokenizer(): Promise<SudachiHandle> {
     throw new SudachiUnavailableError('Sudachi tokenizer did not expose a tokenize() function.', {
       help: [
         'Verify that the installed Sudachi module exports a callable tokenize() method.',
-        'If you are using @sudachi/sudachi, ensure you are running on Node.js 18+ with WebAssembly support.',
+        'If you are using the sudachi WASM bindings, ensure you are running on Node.js 18+ with WebAssembly support.',
       ],
     });
   }
@@ -127,8 +127,8 @@ async function loadSudachiModule(): Promise<unknown> {
   throw new SudachiUnavailableError('Sudachi module is not installed.', {
     cause: lastError,
     help: [
-      'Install the WASM bindings by running `pnpm add @sudachi/sudachi` in apps/web`.',
-      'If you are vendoring another Sudachi-compatible module, update SUDACHI_MODULE_CANDIDATES in sudachi/server.ts.',
+      'Install the WASM bindings by running `pnpm --filter web add sudachi` inside the repo.',
+      'If you are vendoring another Sudachi-compatible module, update SUDACHI_MODULE_CANDIDATES in apps/web/lib/sudachi/server.ts.',
     ],
   });
 }
