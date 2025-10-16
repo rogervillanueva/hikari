@@ -717,18 +717,23 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                                   isWordLike: true,
                                 },
                               ];
+                          const isJapaneseSentence = JAPANESE_CHAR_REGEX.test(
+                            sentence.text_raw ?? ''
+                          );
                           return tokensToRender.map((token) => {
+                            const surface = token.surface ?? '';
                             if (!token.isWordLike) {
+                              if (isJapaneseSentence && surface.trim().length === 0) {
+                                return null;
+                              }
                               return (
                                 <span key={token.id} className="whitespace-pre">
-                                  {token.surface}
+                                  {surface}
                                 </span>
                               );
                             }
                             const tooltipParts = [
-                              token.base && token.base !== token.surface
-                                ? `Base: ${token.base}`
-                                : null,
+                              token.base && token.base !== surface ? `Base: ${token.base}` : null,
                               token.reading ? `Reading: ${token.reading}` : null,
                               token.pos ? token.pos : null,
                             ].filter(Boolean);
@@ -736,11 +741,11 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                               <button
                                 key={token.id}
                                 type="button"
-                                className="rounded px-1 py-0.5 text-left focus:outline-none focus:ring-1 focus:ring-primary"
+                                className="inline-flex items-center rounded px-0.5 py-0.5 text-left transition-all duration-150 ease-out hover:-translate-y-0.5 hover:bg-primary/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:hover:bg-primary/20"
                                 onClick={() => void handleWordClick(sentence, token)}
                                 title={tooltipParts.length ? tooltipParts.join(' • ') : undefined}
                               >
-                                {token.surface}
+                                {surface}
                               </button>
                             );
                           });
