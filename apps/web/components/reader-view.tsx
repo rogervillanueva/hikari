@@ -38,7 +38,6 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     sentence: Sentence;
     token: Token;
     definition?: Definition;
-    sentenceTranslation?: string;
   } | null>(null);
   const [tokenizingSentences, setTokenizingSentences] = useState<Record<string, boolean>>({});
   const [pageIndex, setPageIndex] = useState(0);
@@ -589,14 +588,10 @@ export function ReaderView({ documentId }: ReaderViewProps) {
       pitch: token.pitch,
       provider: ACTIVE_DICTIONARY_PROVIDER,
     };
-    const cachedSentenceTranslation = sentenceTranslations[sentence.index];
-    const sentenceTranslation =
-      cachedSentenceTranslation ?? topDefinition?.examples?.[0]?.en ?? undefined;
     setWordPopup({
       sentence,
       token,
       definition: topDefinition,
-      sentenceTranslation,
     });
   };
 
@@ -765,7 +760,7 @@ export function ReaderView({ documentId }: ReaderViewProps) {
       {wordPopup && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal>
           {(() => {
-            const { token, definition, sentenceTranslation } = wordPopup;
+            const { token, definition } = wordPopup;
             const baseForm = definition?.baseForm ?? token.base ?? token.surface;
             const reading = definition?.reading ?? token.reading;
             const senses = definition?.senses?.length ? definition.senses : [baseForm];
@@ -784,6 +779,8 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                 ].filter(Boolean)
               )
             );
+            const showCurrentForm =
+              token.surface !== baseForm || Boolean(conjugationForm || conjugationType || conjugationDescription);
             return (
               <div className="w-full max-w-md rounded-lg border border-neutral-300 bg-white p-4 shadow-lg dark:border-neutral-700 dark:bg-neutral-950">
                 <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
@@ -811,17 +808,19 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                   </p>
                 ) : null}
                 <div className="mt-3 space-y-3 text-neutral-800 dark:text-neutral-100">
-                  <div>
-                    <p className="text-xs uppercase tracking-wide text-neutral-400">Current form</p>
-                    <p className="text-base font-medium">{token.surface}</p>
-                    {(conjugationForm || conjugationType || conjugationDescription) && (
-                      <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                        {[conjugationType, conjugationForm, conjugationDescription]
-                          .filter(Boolean)
-                          .join(' • ')}
-                      </p>
-                    )}
-                  </div>
+                  {showCurrentForm && (
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-neutral-400">Current form</p>
+                      <p className="text-base font-medium">{token.surface}</p>
+                      {(conjugationForm || conjugationType || conjugationDescription) && (
+                        <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                          {[conjugationType, conjugationForm, conjugationDescription]
+                            .filter(Boolean)
+                            .join(' • ')}
+                        </p>
+                      )}
+                    </div>
+                  )}
                   <div>
                     <p className="text-xs uppercase tracking-wide text-neutral-400">Definition</p>
                     <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-neutral-700 dark:text-neutral-200">
@@ -841,12 +840,6 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                     </div>
                   ) : null}
                 </div>
-                {sentenceTranslation && (
-                  <div className="mt-4 rounded-md bg-neutral-100 p-3 text-sm text-neutral-700 dark:bg-neutral-900 dark:text-neutral-200">
-                    <p className="font-medium text-neutral-600 dark:text-neutral-300">Sentence translation</p>
-                    <p className="mt-1 whitespace-pre-wrap">{sentenceTranslation}</p>
-                  </div>
-                )}
                 <p className="mt-4 text-xs text-neutral-500">
                   Sentence: {wordPopup.sentence.text_raw}
                 </p>
