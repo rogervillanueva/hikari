@@ -1,9 +1,10 @@
+import { tokenizeWithFallback } from '@/lib/morphology/fallback';
 import { buildDiagnosticLog, serializeError } from '@/lib/morphology/diagnostics';
 import { KuromojiUnavailableError, tokenizeWithKuromoji } from '@/lib/kuromoji/server';
 import { SudachiUnavailableError, tokenizeWithSudachi } from '@/lib/sudachi/server';
 import type { TokenizeResponseToken } from '@/workers/tokenize-ja';
 
-export type MorphologySource = 'sudachi' | 'kuromoji';
+export type MorphologySource = 'sudachi' | 'kuromoji' | 'fallback';
 
 export interface MorphologyDiagnostic {
   level: 'info' | 'warning' | 'error';
@@ -22,12 +23,15 @@ export interface MorphologyResult {
 
 export async function tokenizeJapaneseServer(text: string): Promise<MorphologyResult> {
   const diagnostics: MorphologyDiagnostic[] = [];
+  let sudachiError: SudachiUnavailableError | null = null;
+  let kuromojiError: KuromojiUnavailableError | null = null;
 
   try {
     const tokens = await tokenizeWithSudachi(text);
     return { tokens, source: 'sudachi', diagnostics };
   } catch (error) {
     if (error instanceof SudachiUnavailableError) {
+      sudachiError = error;
       const timestamp = new Date().toISOString();
       diagnostics.push({
         level: 'warning',
@@ -57,6 +61,7 @@ export async function tokenizeJapaneseServer(text: string): Promise<MorphologyRe
     return { tokens, source: 'kuromoji', diagnostics };
   } catch (error) {
     if (error instanceof KuromojiUnavailableError) {
+      kuromojiError = error;
       const timestamp = new Date().toISOString();
       diagnostics.push({
         level: 'error',
@@ -75,15 +80,36 @@ export async function tokenizeJapaneseServer(text: string): Promise<MorphologyRe
           },
         }),
       });
-      throw new SudachiUnavailableError('No morphology tokenizer is available.', {
-        cause: error,
-        help: diagnostics.flatMap((item) => item.help ?? []),
-        context: {
-          diagnostics,
-          kuromoji: serializeError(error),
-        },
-      });
+    } else {
+      throw error;
     }
-    throw error;
   }
+
+  const fallbackTokens = tokenizeWithFallback(text);
+  const timestamp = new Date().toISOString();
+  diagnostics.push({
+    level: 'warning',
+    message: 'No morphology tokenizer is available. Falling back to heuristic segmentation.',
+    help: [
+      'Install the WASM bindings by running `pnpm --filter web add sudachi` inside the repo.',
+      'Install it with `pnpm --filter web add kuromoji @types/kuromoji@0.1.3` inside the repo.',
+    ],
+    source: 'fallback',
+    timestamp,
+    log: buildDiagnosticLog({
+      message: 'No morphology tokenizer is available. Falling back to heuristic segmentation.',
+      source: 'fallback',
+      help: [
+        'Install the WASM bindings by running `pnpm --filter web add sudachi` inside the repo.',
+        'Install it with `pnpm --filter web add kuromoji @types/kuromoji@0.1.3` inside the repo.',
+      ],
+      timestamp,
+      details: {
+        sudachi: sudachiError ? serializeError(sudachiError) : null,
+        kuromoji: kuromojiError ? serializeError(kuromojiError) : null,
+      },
+    }),
+  });
+
+  return { tokens: fallbackTokens, source: 'fallback', diagnostics };
 }

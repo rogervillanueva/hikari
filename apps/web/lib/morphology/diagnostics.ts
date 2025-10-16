@@ -62,6 +62,14 @@ export function serializeError(error: unknown, seen: WeakSet<object> = new WeakS
     if (cause !== undefined) {
       result.cause = sanitizeForLog(cause, seen);
     }
+    const context = (error as { context?: unknown }).context;
+    if (context !== undefined) {
+      result.context = sanitizeForLog(context, seen);
+    }
+    const help = (error as { help?: unknown }).help;
+    if (help !== undefined) {
+      result.help = sanitizeForLog(help, seen);
+    }
     return result;
   }
 
