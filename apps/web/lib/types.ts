@@ -32,6 +32,13 @@ export interface Token {
   base?: string;
   reading?: string;
   pos?: string;
+  isWordLike?: boolean;
+  features?: string[];
+  conjugation?: {
+    type?: string;
+    form?: string;
+    description?: string;
+  };
   pitch?: PitchInfo;
 }
 

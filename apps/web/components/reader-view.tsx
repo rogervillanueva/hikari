@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Ellipsis, Pause, Play } from 'lucide-react';
+import { Ellipsis, Pause, Play, Volume2 } from 'lucide-react';
 import {
   ACTIVE_DICTIONARY_PROVIDER,
   ACTIVE_TRANSLATION_PROVIDER,
@@ -12,9 +12,11 @@ import { readerConfig } from '@/config/reader';
 import { useDocumentsStore } from '@/store/documents';
 import { getDictionaryProvider } from '@/providers/dictionary/mock';
 import { getTtsProvider } from '@/providers/tts';
-import type { Sentence } from '@/lib/types';
+import type { Definition } from '@/providers/dictionary/types';
+import type { Sentence, Token } from '@/lib/types';
 import type { TranslationDirection } from '@/providers/translation/base';
 import { translateSentences } from '@/utils/translateSentences';
+import { tokenizeJapanese } from '@/workers/tokenize-ja';
 
 interface ReaderViewProps {
   documentId: string;
@@ -25,6 +27,7 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   const documents = useDocumentsStore((state) => state.documents);
   const sentencesByDoc = useDocumentsStore((state) => state.sentences);
   const loadDocuments = useDocumentsStore((state) => state.loadDocuments);
+  const setSentenceTokens = useDocumentsStore((state) => state.setSentenceTokens);
   const [activeSentence, setActiveSentence] = useState<number | null>(null);
   const playingRef = useRef(false);
   const [sentenceTranslations, setSentenceTranslations] = useState<Record<number, string>>({});
@@ -33,10 +36,11 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   const [loadingChunks, setLoadingChunks] = useState<Record<number, boolean>>({});
   const [wordPopup, setWordPopup] = useState<{
     sentence: Sentence;
-    token: string;
-    translation: string;
+    token: Token;
+    definition?: Definition;
     sentenceTranslation?: string;
   } | null>(null);
+  const [tokenizingSentences, setTokenizingSentences] = useState<Record<string, boolean>>({});
   const [pageIndex, setPageIndex] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -66,6 +70,8 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     setOpenSentenceTranslations({});
     setChunkTranslations({});
     setLoadingChunks({});
+    setTokenizingSentences({});
+    setWordPopup(null);
   }, [documentId]);
 
   const paragraphs = useMemo(() => {
@@ -141,6 +147,48 @@ export function ReaderView({ documentId }: ReaderViewProps) {
 
   const totalPages = pages.length;
   const currentPage = pages[pageIndex] ?? [];
+
+  useEffect(() => {
+    if (!currentPage.length) {
+      return;
+    }
+    const pending = new Set(Object.keys(tokenizingSentences));
+    const sentencesNeedingTokens = currentPage
+      .flat()
+      .filter((sentence) => !(sentence.tokens && sentence.tokens.length) && !pending.has(sentence.id));
+    if (!sentencesNeedingTokens.length) {
+      return;
+    }
+    sentencesNeedingTokens.forEach((sentence) => {
+      setTokenizingSentences((prev) => ({ ...prev, [sentence.id]: true }));
+      void tokenizeJapanese({ text: sentence.text_raw })
+        .then(({ tokens }) => {
+          const enriched: Token[] = tokens.map((token, index) => ({
+            id: `${sentence.id}-${index}`,
+            sentenceId: sentence.id,
+            index,
+            surface: token.surface,
+            base: token.base ?? token.surface,
+            reading: token.reading,
+            pos: token.pos,
+            features: token.features,
+            conjugation: token.conjugation,
+            pitch: token.pitch,
+            isWordLike: token.isWordLike ?? /\S/u.test(token.surface),
+          }));
+          return setSentenceTokens(sentence.documentId, sentence.id, enriched);
+        })
+        .catch((error) => {
+          console.error('[reader] Failed to tokenize sentence', sentence.id, error);
+        })
+        .finally(() => {
+          setTokenizingSentences((prev) => {
+            const { [sentence.id]: _omitted, ...rest } = prev;
+            return rest;
+          });
+        });
+    });
+  }, [currentPage, setSentenceTokens, tokenizingSentences]);
 
   type TranslationChunk = {
     index: number;
@@ -406,7 +454,7 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     async (index: number, sentence: Sentence) => {
       setActiveSentence(index);
       const provider = getTtsProvider(ACTIVE_TTS_PROVIDER);
-      const result = await provider.speakSentence(sentence.text_raw, 'ja');
+      const result = await provider.speakSentence(sentence.text_raw, sourceLanguage);
       const url = await provider.getAudioUrl(result.audioId);
       const audio = getAudioElement();
       if (!audio) {
@@ -446,7 +494,47 @@ export function ReaderView({ documentId }: ReaderViewProps) {
         }
       });
     },
-    [getAudioElement]
+    [getAudioElement, sourceLanguage]
+  );
+
+  const playWordAudio = useCallback(
+    async (token: Token, definition?: Definition) => {
+      const spokenText = definition?.audio?.text ?? token.surface;
+      if (!spokenText?.trim()) {
+        return false;
+      }
+      const audio = getAudioElement();
+      if (!audio) {
+        return false;
+      }
+      try {
+        if (definition?.audio?.url) {
+          audio.pause();
+          audio.currentTime = 0;
+          audio.src = definition.audio.url;
+          const playPromise = audio.play();
+          if (playPromise) {
+            await playPromise;
+          }
+          return true;
+        }
+        const provider = getTtsProvider(ACTIVE_TTS_PROVIDER);
+        const result = await provider.speakSentence(spokenText, sourceLanguage);
+        const url = await provider.getAudioUrl(result.audioId);
+        audio.pause();
+        audio.currentTime = 0;
+        audio.src = url;
+        const playPromise = audio.play();
+        if (playPromise) {
+          await playPromise;
+        }
+        return true;
+      } catch (error) {
+        console.error('Failed to play word audio', error);
+        return false;
+      }
+    },
+    [getAudioElement, sourceLanguage]
   );
 
   const handleMasterPlay = useCallback(async () => {
@@ -469,22 +557,45 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     playingRef.current = false;
   }, [activeSentence, sentenceList, playSentence]);
 
-  const handleWordClick = async (sentence: Sentence, token: string) => {
+  const handleWordClick = async (sentence: Sentence, token: Token) => {
+    if (!token.isWordLike) {
+      return;
+    }
     const dictionary = getDictionaryProvider(ACTIVE_DICTIONARY_PROVIDER);
-    const definitions = await dictionary.lookup(token, sourceLanguage, {
-      sentence: sentence.text_raw,
-      documentId: sentence.documentId,
-      direction,
-      providerName: ACTIVE_TRANSLATION_PROVIDER,
-    });
-    const topDefinition = definitions[0];
+    const lookupTerm = token.base ?? token.surface;
+    let definitions: Definition[] = [];
+    try {
+      definitions = await dictionary.lookup(lookupTerm, sourceLanguage, {
+        sentence: sentence.text_raw,
+        documentId: sentence.documentId,
+        direction,
+        providerName: ACTIVE_TRANSLATION_PROVIDER,
+        token,
+      });
+    } catch (error) {
+      console.error('Dictionary lookup failed', error);
+    }
+    const topDefinition = definitions[0] ?? {
+      term: lookupTerm,
+      baseForm: token.base ?? token.surface,
+      reading: token.reading,
+      senses: [lookupTerm],
+      partOfSpeech: token.features?.length
+        ? token.features
+        : token.pos
+        ? [token.pos]
+        : undefined,
+      conjugation: token.conjugation,
+      pitch: token.pitch,
+      provider: ACTIVE_DICTIONARY_PROVIDER,
+    };
     const cachedSentenceTranslation = sentenceTranslations[sentence.index];
     const sentenceTranslation =
       cachedSentenceTranslation ?? topDefinition?.examples?.[0]?.en ?? undefined;
     setWordPopup({
       sentence,
       token,
-      translation: topDefinition?.senses[0] ?? token,
+      definition: topDefinition,
       sentenceTranslation,
     });
   };
@@ -588,21 +699,46 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                             : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'
                         }`}
                       >
-                        {sentence.text_raw.split(/(\s+)/).map((token, tokenIndex) => {
-                          if (!token.trim()) {
-                            return <span key={`${sentence.id}-${tokenIndex}`}>{token}</span>;
-                          }
-                          return (
-                            <button
-                              key={`${sentence.id}-${tokenIndex}`}
-                              type="button"
-                              className="rounded px-1 py-0.5 text-left focus:outline-none focus:ring-1 focus:ring-primary"
-                              onClick={() => void handleWordClick(sentence, token)}
-                            >
-                              {token}
-                            </button>
-                          );
-                        })}
+                        {(() => {
+                          const tokensToRender: Token[] = sentence.tokens?.length
+                            ? sentence.tokens
+                            : [
+                                {
+                                  id: `${sentence.id}-fallback`,
+                                  sentenceId: sentence.id,
+                                  index: 0,
+                                  surface: sentence.text_raw,
+                                  isWordLike: true,
+                                },
+                              ];
+                          return tokensToRender.map((token) => {
+                            if (!token.isWordLike) {
+                              return (
+                                <span key={token.id} className="whitespace-pre">
+                                  {token.surface}
+                                </span>
+                              );
+                            }
+                            const tooltipParts = [
+                              token.base && token.base !== token.surface
+                                ? `Base: ${token.base}`
+                                : null,
+                              token.reading ? `Reading: ${token.reading}` : null,
+                              token.pos ? token.pos : null,
+                            ].filter(Boolean);
+                            return (
+                              <button
+                                key={token.id}
+                                type="button"
+                                className="rounded px-1 py-0.5 text-left focus:outline-none focus:ring-1 focus:ring-primary"
+                                onClick={() => void handleWordClick(sentence, token)}
+                                title={tooltipParts.length ? tooltipParts.join(' • ') : undefined}
+                              >
+                                {token.surface}
+                              </button>
+                            );
+                          });
+                        })()}
                       </span>
                       <button
                         type="button"
@@ -628,36 +764,113 @@ export function ReaderView({ documentId }: ReaderViewProps) {
       </section>
       {wordPopup && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal>
-          <div className="w-full max-w-md rounded-lg border border-neutral-300 bg-white p-4 shadow-lg dark:border-neutral-700 dark:bg-neutral-950">
-            <h2 className="text-lg font-semibold">{wordPopup.token}</h2>
-            <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">
-              {wordPopup.translation}
-            </p>
-            {(() => {
-              const sentenceTranslation = wordPopup.sentenceTranslation?.trim();
-              const baseTranslation = wordPopup.translation.trim();
-              if (!sentenceTranslation) {
-                return null;
-              }
-              if (sentenceTranslation === baseTranslation) {
-                return null;
-              }
-              return (
-                <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">
-                  {sentenceTranslation}
+          {(() => {
+            const { token, definition, sentenceTranslation } = wordPopup;
+            const baseForm = definition?.baseForm ?? token.base ?? token.surface;
+            const reading = definition?.reading ?? token.reading;
+            const senses = definition?.senses?.length ? definition.senses : [baseForm];
+            const partOfSpeech = definition?.partOfSpeech ?? (token.pos ? [token.pos] : undefined);
+            const conjugationForm = definition?.conjugation?.form ?? token.conjugation?.form;
+            const conjugationDescription =
+              definition?.conjugation?.description ?? token.conjugation?.description;
+            const conjugationType = definition?.conjugation?.type ?? token.conjugation?.type;
+            const pitchInfo = definition?.pitch ?? token.pitch;
+            const notes = definition?.notes ?? [];
+            const featureTags = Array.from(
+              new Set(
+                [
+                  ...(partOfSpeech ?? []),
+                  ...((token.features ?? []).filter(Boolean) as string[]),
+                ].filter(Boolean)
+              )
+            );
+            return (
+              <div className="w-full max-w-md rounded-lg border border-neutral-300 bg-white p-4 shadow-lg dark:border-neutral-700 dark:bg-neutral-950">
+                <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
+                  {baseForm}
+                </h2>
+                {reading && (
+                  <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-300">{reading}</p>
+                )}
+                {featureTags.length ? (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {featureTags.map((tag) => (
+                      <span
+                        key={tag}
+                        className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                {pitchInfo ? (
+                  <p className="mt-2 text-xs uppercase tracking-wide text-neutral-400">
+                    Pitch: {pitchInfo.pattern}
+                    {pitchInfo.accents?.length ? ` (accent at ${pitchInfo.accents.join(', ')})` : ''}
+                  </p>
+                ) : null}
+                <div className="mt-3 space-y-3 text-neutral-800 dark:text-neutral-100">
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-neutral-400">Current form</p>
+                    <p className="text-base font-medium">{token.surface}</p>
+                    {(conjugationForm || conjugationType || conjugationDescription) && (
+                      <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                        {[conjugationType, conjugationForm, conjugationDescription]
+                          .filter(Boolean)
+                          .join(' • ')}
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-neutral-400">Definition</p>
+                    <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-neutral-700 dark:text-neutral-200">
+                      {senses.map((sense, index) => (
+                        <li key={`${token.id}-sense-${index}`}>{sense}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  {notes.length ? (
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-neutral-400">Notes</p>
+                      <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-neutral-600 dark:text-neutral-300">
+                        {notes.map((note, index) => (
+                          <li key={`${token.id}-note-${index}`}>{note}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </div>
+                {sentenceTranslation && (
+                  <div className="mt-4 rounded-md bg-neutral-100 p-3 text-sm text-neutral-700 dark:bg-neutral-900 dark:text-neutral-200">
+                    <p className="font-medium text-neutral-600 dark:text-neutral-300">Sentence translation</p>
+                    <p className="mt-1 whitespace-pre-wrap">{sentenceTranslation}</p>
+                  </div>
+                )}
+                <p className="mt-4 text-xs text-neutral-500">
+                  Sentence: {wordPopup.sentence.text_raw}
                 </p>
-              );
-            })()}
-            <p className="mt-4 text-xs text-neutral-500">
-              Sentence: {wordPopup.sentence.text_raw}
-            </p>
-            <button
-              className="mt-4 rounded-md bg-primary px-3 py-2 text-sm font-medium text-white"
-              onClick={() => setWordPopup(null)}
-            >
-              Close
-            </button>
-          </div>
+                <p className="mt-1 text-xs text-neutral-500">
+                  Dictionary provider: {definition?.provider ?? ACTIVE_DICTIONARY_PROVIDER}
+                </p>
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-2 rounded-md border border-neutral-300 px-3 py-2 text-sm font-medium text-neutral-700 transition-colors hover:border-primary hover:text-primary dark:border-neutral-700 dark:text-neutral-200"
+                    onClick={() => void playWordAudio(token, definition)}
+                  >
+                    <Volume2 className="h-4 w-4" /> Play audio
+                  </button>
+                  <button
+                    className="rounded-md bg-primary px-3 py-2 text-sm font-medium text-white"
+                    onClick={() => setWordPopup(null)}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>

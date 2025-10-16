@@ -1,6 +1,6 @@
 'use client';
 
-import { ACTIVE_TRANSLATION_PROVIDER } from '@/lib/config';
+import { ACTIVE_TRANSLATION_PROVIDER, ACTIVE_TTS_PROVIDER } from '@/lib/config';
 import type { TranslationDirection } from '@/providers/translation/base';
 import type {
   Definition,
@@ -79,10 +79,26 @@ export const mockDictionaryProvider: DictionaryProvider = {
 
     const [termTranslation, sentenceTranslation] = translations;
 
+    const token = opts.token;
+    const partOfSpeech = token?.features?.length
+      ? token.features
+      : token?.pos
+      ? [token.pos]
+      : undefined;
     const definition: Definition = {
       term,
+      baseForm: token?.base ?? term,
       reading,
+      pronunciation: reading,
       senses: [termTranslation || term],
+      partOfSpeech,
+      conjugation: token?.conjugation,
+      notes: token?.conjugation?.description ? [token.conjugation.description] : undefined,
+      pitch: token?.pitch,
+      audio: {
+        text: term,
+        provider: ACTIVE_TTS_PROVIDER,
+      },
       examples:
         sentence
           ? [

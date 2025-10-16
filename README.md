@@ -63,6 +63,48 @@ The Dexie schema is automatically created the first time the reader runs in a
 browser context. When using the real Azure adapter make sure to enable the
 Translator resource in the selected region and grant the API key access to the
 Text Translation API.
+
+### Word-level dictionary & morphology configuration
+
+The reader now tokenises each sentence and opens word-level popups with
+dictionary, conjugation, audio, and (when available) pitch-accent data. The
+default demo uses `Intl.Segmenter` for coarse tokenisation and the mock
+dictionary provider, which is enough to explore the UI but does not return full
+grammar metadata. To plug in production services:
+
+1. **Morphology API** — expose an HTTP endpoint that accepts `POST
+   {"text":"…"}` and returns a payload shaped like
+   `{ tokens: [{ surface, base, reading, pos, features, conjugation, pitch }] }`.
+   Configure the client with:
+
+   ```bash
+   NEXT_PUBLIC_MORPHOLOGY_ENDPOINT=https://your-morphology-endpoint.example.com/parse
+   NEXT_PUBLIC_MORPHOLOGY_API_KEY=OPTIONAL_HEADER_VALUE
+   ```
+
+   *Recommended options*: [Goo Labs Morphological Analysis
+   API](https://labs.goo.ne.jp/api/morph) (`app_id` header → proxy it through a
+   lightweight Next.js API route) or an OpenAI-compatible model (e.g.
+   `gpt-4o-mini`) that emits JSON tokens. Update the server route to translate
+   the provider-specific response into the schema above and include
+   `conjugation.type/form/description` plus pitch metadata when available.
+
+2. **Dictionary data** — replace `providers/dictionary/mock.ts` with a real
+   dictionary (JMdict, commercial API, etc.). Populate `Definition.senses`,
+   `partOfSpeech`, `notes`, `pitch`, and `audio.url`/`audio.text` for richer
+   popups.
+
+3. **Pitch accent** — return `{ pattern: string; accents: number[] }` within the
+   morphology or dictionary response. The popup renders the pattern string and
+   accent positions when supplied.
+
+4. **Audio** — the popup reuses the active TTS provider. If your dictionary
+   returns pre-recorded audio, set `definition.audio.url` and the play button
+   will stream it instead of synthesising speech.
+
+Without custom providers the UI still tokenises via `Intl.Segmenter`, defaults
+the base form to the clicked surface, and falls back to inline translation for
+definitions.
 # Hikari Reader
 
 Hikari Reader is a Next.js Progressive Web App for sentence-aligned bilingual reading between Japanese and English. V1 focuses on client-first storage, mock language services, and an installable PWA scaffold so teams can plug in production-grade providers later without refactoring.

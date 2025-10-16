@@ -3,7 +3,7 @@
 import { create } from 'zustand';
 import { nanoid } from 'nanoid';
 import { db } from '@/lib/db';
-import type { DocumentMeta, Sentence } from '@/lib/types';
+import type { DocumentMeta, Sentence, Token } from '@/lib/types';
 import { sentenceSplitter } from '@/workers/sentence-segmentation';
 
 interface DocumentsState {
@@ -12,6 +12,11 @@ interface DocumentsState {
   loading: boolean;
   loadDocuments(): Promise<void>;
   createFromText(title: string, text: string, source: 'paste' | 'pdf'): Promise<DocumentMeta>;
+  setSentenceTokens(
+    documentId: string,
+    sentenceId: string,
+    tokens: Token[]
+  ): Promise<void>;
 }
 
 export const useDocumentsStore = create<DocumentsState>((set, get) => ({
@@ -60,5 +65,19 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
     );
     await get().loadDocuments();
     return doc;
+  },
+  async setSentenceTokens(documentId, sentenceId, tokens) {
+    await db.sentences.update(sentenceId, { tokens });
+    set((state) => {
+      const sentencesForDoc = state.sentences[documentId] ?? [];
+      return {
+        sentences: {
+          ...state.sentences,
+          [documentId]: sentencesForDoc.map((sentence) =>
+            sentence.id === sentenceId ? { ...sentence, tokens } : sentence
+          ),
+        },
+      };
+    });
   }
 }));
