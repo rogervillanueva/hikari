@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { TokenizeResponseToken } from '@/workers/tokenize-ja';
 
 const SUDACHI_DEFAULT_MODULES = ['sudachi', '@sudachi/browser', '@sudachi/sudachi'] as const;
@@ -197,14 +198,19 @@ async function tryLoadSudachiOverride(moduleName: string, require: NodeRequire) 
 }
 
 async function tryLoadSudachiFromSudachi(require: NodeRequire) {
+  const moduleName = 'sudachi';
+  const resolved = resolveOptionalModule(require, moduleName);
+  if (!resolved) {
+    return { ok: false as const, error: createModuleNotFoundError(moduleName) };
+  }
+
   try {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-    const module = require('sudachi');
+    const module = loadCommonJsModule(require, resolved);
     return { ok: true as const, module };
   } catch (error) {
     if (isRequireEsmError(error)) {
       try {
-        const module = await import('sudachi');
+        const module = await importResolvedModule(resolved);
         return { ok: true as const, module };
       } catch (innerError) {
         return { ok: false as const, error: innerError };
@@ -215,14 +221,19 @@ async function tryLoadSudachiFromSudachi(require: NodeRequire) {
 }
 
 async function tryLoadSudachiFromBrowser(require: NodeRequire) {
+  const moduleName = ['@sudachi', 'browser'].join('/');
+  const resolved = resolveOptionalModule(require, moduleName);
+  if (!resolved) {
+    return { ok: false as const, error: createModuleNotFoundError(moduleName) };
+  }
+
   try {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-    const module = require('@sudachi/browser');
+    const module = loadCommonJsModule(require, resolved);
     return { ok: true as const, module };
   } catch (error) {
     if (isRequireEsmError(error)) {
       try {
-        const module = await import('@sudachi/browser');
+        const module = await importResolvedModule(resolved);
         return { ok: true as const, module };
       } catch (innerError) {
         return { ok: false as const, error: innerError };
@@ -233,14 +244,19 @@ async function tryLoadSudachiFromBrowser(require: NodeRequire) {
 }
 
 async function tryLoadSudachiFromScoped(require: NodeRequire) {
+  const moduleName = ['@sudachi', 'sudachi'].join('/');
+  const resolved = resolveOptionalModule(require, moduleName);
+  if (!resolved) {
+    return { ok: false as const, error: createModuleNotFoundError(moduleName) };
+  }
+
   try {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-    const module = require('@sudachi/sudachi');
+    const module = loadCommonJsModule(require, resolved);
     return { ok: true as const, module };
   } catch (error) {
     if (isRequireEsmError(error)) {
       try {
-        const module = await import('@sudachi/sudachi');
+        const module = await importResolvedModule(resolved);
         return { ok: true as const, module };
       } catch (innerError) {
         return { ok: false as const, error: innerError };
@@ -248,6 +264,38 @@ async function tryLoadSudachiFromScoped(require: NodeRequire) {
     }
     return { ok: false as const, error };
   }
+}
+
+function loadCommonJsModule(require: NodeRequire, resolvedPath: string): unknown {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, import/no-dynamic-require
+  return require(resolvedPath);
+}
+
+async function importResolvedModule(resolvedPath: string): Promise<unknown> {
+  const url = pathToFileURL(resolvedPath).href;
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+  return import(url);
+}
+
+function resolveOptionalModule(require: NodeRequire, moduleName: string): string | null {
+  try {
+    return require.resolve(moduleName);
+  } catch (error) {
+    if (isModuleNotFoundError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function createModuleNotFoundError(moduleName: string): Error {
+  const error = new Error(`Module not found: ${moduleName}`);
+  (error as { code?: string }).code = 'MODULE_NOT_FOUND';
+  return error;
+}
+
+function isModuleNotFoundError(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && (error as { code?: unknown }).code === 'MODULE_NOT_FOUND';
 }
 
 async function instantiateTokenizer(

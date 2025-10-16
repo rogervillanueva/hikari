@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { TokenizeResponseToken } from '@/workers/tokenize-ja';
 
 type NodeRequire = NodeJS.Require;
@@ -136,15 +137,18 @@ function isRequireEsmError(error: unknown): boolean {
 }
 
 async function tryLoadKuromojiOverride(moduleName: string, require: NodeRequire) {
+  const resolved = resolveOptionalModule(require, moduleName);
+  if (!resolved) {
+    return { ok: false as const, error: createModuleNotFoundError(moduleName) };
+  }
+
   try {
-    // eslint-disable-next-line import/no-dynamic-require, @typescript-eslint/no-unsafe-assignment
-    const module = require(moduleName);
+    const module = loadCommonJsModule(require, resolved);
     return { ok: true as const, module };
   } catch (error) {
     if (isRequireEsmError(error)) {
       try {
-        // eslint-disable-next-line import/no-dynamic-require, @typescript-eslint/no-unsafe-assignment
-        const module = await import(/* webpackIgnore: true */ moduleName);
+        const module = await importResolvedModule(resolved);
         return { ok: true as const, module };
       } catch (innerError) {
         return { ok: false as const, error: innerError };
@@ -155,14 +159,19 @@ async function tryLoadKuromojiOverride(moduleName: string, require: NodeRequire)
 }
 
 async function tryLoadKuromojiDefault(require: NodeRequire) {
+  const moduleName = 'kuromoji';
+  const resolved = resolveOptionalModule(require, moduleName);
+  if (!resolved) {
+    return { ok: false as const, error: createModuleNotFoundError(moduleName) };
+  }
+
   try {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-    const module = require('kuromoji');
+    const module = loadCommonJsModule(require, resolved);
     return { ok: true as const, module };
   } catch (error) {
     if (isRequireEsmError(error)) {
       try {
-        const module = await import('kuromoji');
+        const module = await importResolvedModule(resolved);
         return { ok: true as const, module };
       } catch (innerError) {
         return { ok: false as const, error: innerError };
@@ -170,4 +179,36 @@ async function tryLoadKuromojiDefault(require: NodeRequire) {
     }
     return { ok: false as const, error };
   }
+}
+
+function resolveOptionalModule(require: NodeRequire, moduleName: string): string | null {
+  try {
+    return require.resolve(moduleName);
+  } catch (error) {
+    if (isModuleNotFoundError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function loadCommonJsModule(require: NodeRequire, resolvedPath: string): unknown {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, import/no-dynamic-require
+  return require(resolvedPath);
+}
+
+async function importResolvedModule(resolvedPath: string): Promise<unknown> {
+  const url = pathToFileURL(resolvedPath).href;
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+  return import(url);
+}
+
+function isModuleNotFoundError(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && (error as { code?: unknown }).code === 'MODULE_NOT_FOUND';
+}
+
+function createModuleNotFoundError(moduleName: string): Error {
+  const error = new Error(`Module not found: ${moduleName}`);
+  (error as { code?: string }).code = 'MODULE_NOT_FOUND';
+  return error;
 }
