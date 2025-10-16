@@ -18,6 +18,7 @@ export interface TranslateSentencesParams {
   batchSize?: number;
   maxCharactersPerBatch?: number;
   abortSignal?: AbortSignal;
+  instruction?: string;
 }
 
 export interface TranslateSentencesResult {
@@ -27,6 +28,8 @@ export interface TranslateSentencesResult {
 
 const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_MAX_CHARACTERS_PER_BATCH = 4500;
+
+const INSTRUCTION_SENTENCE_ID = "__instruction__";
 
 type TranslationField = "translation_en" | "translation_ja";
 
@@ -142,7 +145,10 @@ export const translateSentences = async (
     batchSize = DEFAULT_BATCH_SIZE,
     maxCharactersPerBatch = DEFAULT_MAX_CHARACTERS_PER_BATCH,
     abortSignal,
+    instruction,
   } = params;
+
+  const instructionText = instruction?.trim();
 
   const provider = getTranslationProvider(providerName);
   const translationField = fieldForDirection(direction);
@@ -196,14 +202,25 @@ export const translateSentences = async (
       continue;
     }
 
-    const estimate = provider.estimateCost(batch, direction);
+    const requestBatch =
+      instructionText && batch.length
+        ? [
+            {
+              id: INSTRUCTION_SENTENCE_ID,
+              text: instructionText,
+            },
+            ...batch,
+          ]
+        : batch;
+
+    const estimate = provider.estimateCost(requestBatch, direction);
     if (estimate.estimatedCostCents > remainingBudget) {
       throw new Error("Document translation budget exhausted");
     }
 
     const response = shouldProxyThroughApi
       ? await proxyTranslateBatchThroughApi({
-          batch,
+          batch: requestBatch,
           direction,
           documentId,
           estimate,
@@ -211,7 +228,7 @@ export const translateSentences = async (
           providerName: provider.name,
         })
       : await provider.translateBatch({
-          sentences: batch,
+          sentences: requestBatch,
           direction,
           documentId,
           remainingBudgetCents: remainingBudget,
@@ -226,8 +243,16 @@ export const translateSentences = async (
     await db.transaction("rw", db.sentences, db.caches, async () => {
       const updates: Promise<unknown>[] = [];
 
-      response.translations.forEach((translation, index) => {
-        const sentence = batch[index];
+      const sentenceMap = new Map(batch.map((sentence) => [sentence.id, sentence]));
+
+      response.translations.forEach((translation) => {
+        if (translation.id === INSTRUCTION_SENTENCE_ID) {
+          return;
+        }
+        const sentence = sentenceMap.get(translation.id);
+        if (!sentence) {
+          return;
+        }
         const translatedText = translation.translatedText;
         results[sentence.id] = translatedText;
 

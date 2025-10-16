@@ -29,8 +29,8 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   const playingRef = useRef(false);
   const [sentenceTranslations, setSentenceTranslations] = useState<Record<number, string>>({});
   const [openSentenceTranslations, setOpenSentenceTranslations] = useState<Record<number, boolean>>({});
-  const [pageTranslations, setPageTranslations] = useState<Record<number, Record<string, string>>>({});
-  const [loadingPages, setLoadingPages] = useState<Record<number, boolean>>({});
+  const [chunkTranslations, setChunkTranslations] = useState<Record<number, Record<string, string>>>({});
+  const [loadingChunks, setLoadingChunks] = useState<Record<number, boolean>>({});
   const [wordPopup, setWordPopup] = useState<{
     sentence: Sentence;
     token: string;
@@ -46,6 +46,9 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   );
   const sentenceList = sentencesByDoc[documentId] ?? [];
   const sentencesPerPage = readerConfig.sentencesPerPage;
+  const translationInstruction = readerConfig.translationInstruction;
+  const chunkCharacterLimit = readerConfig.translationChunkCharacterLimit;
+  const chunkPrefetchThreshold = readerConfig.translationChunkPrefetchThreshold;
 
   useEffect(() => {
     void loadDocuments();
@@ -61,8 +64,8 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     setPageIndex(0);
     setSentenceTranslations({});
     setOpenSentenceTranslations({});
-    setPageTranslations({});
-    setLoadingPages({});
+    setChunkTranslations({});
+    setLoadingChunks({});
   }, [documentId]);
 
   const paragraphs = useMemo(() => {
@@ -139,11 +142,79 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   const totalPages = pages.length;
   const currentPage = pages[pageIndex] ?? [];
 
+  type TranslationChunk = {
+    index: number;
+    startPage: number;
+    endPage: number;
+    sentences: Sentence[];
+    characterCount: number;
+  };
+
+  const chunks = useMemo(() => {
+    if (!pages.length) {
+      return [] as TranslationChunk[];
+    }
+    const limit = Math.max(chunkCharacterLimit, 500);
+    const list: TranslationChunk[] = [];
+    let current: Sentence[] = [];
+    let currentChars = 0;
+    let startPage = 0;
+    let endPage = 0;
+
+    const pushCurrent = () => {
+      if (!current.length) {
+        return;
+      }
+      list.push({
+        index: list.length,
+        startPage,
+        endPage,
+        sentences: current,
+        characterCount: currentChars,
+      });
+      current = [];
+      currentChars = 0;
+    };
+
+    pages.forEach((page, pageIndex) => {
+      const pageSentences = page.flat();
+      if (!pageSentences.length) {
+        return;
+      }
+      pageSentences.forEach((sentence) => {
+        const length = sentence.text_raw.length;
+        if (current.length && currentChars + length > limit) {
+          pushCurrent();
+        }
+        if (!current.length) {
+          startPage = pageIndex;
+        }
+        current.push(sentence);
+        currentChars += length;
+        endPage = pageIndex;
+      });
+    });
+
+    pushCurrent();
+
+    return list;
+  }, [pages, chunkCharacterLimit]);
+
   useEffect(() => {
     if (pageIndex >= totalPages && totalPages > 0) {
       setPageIndex(totalPages - 1);
     }
   }, [pageIndex, totalPages]);
+
+  const pageToChunkIndex = useMemo(() => {
+    const map = new Map<number, number>();
+    chunks.forEach((chunk, index) => {
+      for (let page = chunk.startPage; page <= chunk.endPage; page += 1) {
+        map.set(page, index);
+      }
+    });
+    return map;
+  }, [chunks]);
 
   const sentenceToPageIndex = useMemo(() => {
     const map = new Map<number, number>();
@@ -157,43 +228,56 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     return map;
   }, [pages]);
 
+  const sentenceToChunkIndex = useMemo(() => {
+    const map = new Map<number, number>();
+    chunks.forEach((chunk, index) => {
+      chunk.sentences.forEach((sentence) => {
+        map.set(sentence.index, index);
+      });
+    });
+    return map;
+  }, [chunks]);
+
   const sourceLanguage = document?.lang_source ?? 'ja';
   const direction: TranslationDirection = sourceLanguage === 'en' ? 'en-ja' : 'ja-en';
 
-  const ensurePageTranslations = useCallback(
-    async (targetPage: number) => {
+  const ensureChunkTranslations = useCallback(
+    async (targetChunk: number) => {
       if (!document) {
         return;
       }
-      if (targetPage < 0 || targetPage >= pages.length) {
+      if (targetChunk < 0 || targetChunk >= chunks.length) {
         return;
       }
-      if (pageTranslations[targetPage] || loadingPages[targetPage]) {
-        return;
-      }
-
-      const page = pages[targetPage];
-      const sentencesForPage = page.flat();
-      if (!sentencesForPage.length) {
-        setPageTranslations((prev) => ({ ...prev, [targetPage]: {} }));
+      if (chunkTranslations[targetChunk] || loadingChunks[targetChunk]) {
         return;
       }
 
-      setLoadingPages((prev) => ({ ...prev, [targetPage]: true }));
+      const chunk = chunks[targetChunk];
+      const sentencesForChunk = chunk.sentences;
+      if (!sentencesForChunk.length) {
+        setChunkTranslations((prev) => ({ ...prev, [targetChunk]: {} }));
+        return;
+      }
+
+      setLoadingChunks((prev) => ({ ...prev, [targetChunk]: true }));
       try {
         const { translations } = await translateSentences({
-          sentences: sentencesForPage.map((sentence) => ({
+          sentences: sentencesForChunk.map((sentence) => ({
             id: sentence.id,
             text: sentence.text_raw,
           })),
           direction,
           documentId: document.id,
+          batchSize: sentencesForChunk.length,
+          maxCharactersPerBatch: Math.max(chunk.characterCount, chunkCharacterLimit),
+          instruction: translationInstruction,
         });
 
-        setPageTranslations((prev) => ({ ...prev, [targetPage]: translations }));
+        setChunkTranslations((prev) => ({ ...prev, [targetChunk]: translations }));
         setSentenceTranslations((prev) => {
           const updates: Record<number, string> = {};
-          sentencesForPage.forEach((sentence) => {
+          sentencesForChunk.forEach((sentence) => {
             const translated = translations[sentence.id];
             if (translated) {
               updates[sentence.index] = translated;
@@ -205,17 +289,42 @@ export function ReaderView({ documentId }: ReaderViewProps) {
           return { ...prev, ...updates };
         });
       } catch (error) {
-        console.error('Failed to translate page', error);
-        setPageTranslations((prev) => ({ ...prev, [targetPage]: {} }));
+        console.error('Failed to translate chunk', error);
+        setChunkTranslations((prev) => ({ ...prev, [targetChunk]: {} }));
       } finally {
-        setLoadingPages((prev) => {
+        setLoadingChunks((prev) => {
           const next = { ...prev };
-          delete next[targetPage];
+          delete next[targetChunk];
           return next;
         });
       }
     },
-    [document, direction, loadingPages, pageTranslations, pages]
+    [
+      document,
+      chunks,
+      chunkTranslations,
+      loadingChunks,
+      direction,
+      chunkCharacterLimit,
+      translationInstruction,
+    ]
+  );
+
+  const ensurePageTranslations = useCallback(
+    async (targetPage: number) => {
+      if (!document) {
+        return;
+      }
+      if (targetPage < 0 || targetPage >= pages.length) {
+        return;
+      }
+      const chunkIndex = pageToChunkIndex.get(targetPage);
+      if (typeof chunkIndex !== 'number') {
+        return;
+      }
+      await ensureChunkTranslations(chunkIndex);
+    },
+    [document, pages.length, pageToChunkIndex, ensureChunkTranslations]
   );
 
   useEffect(() => {
@@ -230,12 +339,38 @@ export function ReaderView({ documentId }: ReaderViewProps) {
         void ensurePageTranslations(target);
       }
     }
-  }, [pageIndex, pages.length, ensurePageTranslations]);
+    const currentChunkIndex = pageToChunkIndex.get(pageIndex);
+    if (typeof currentChunkIndex === 'number') {
+      const currentChunk = chunks[currentChunkIndex];
+      if (currentChunk) {
+        const pagesRemaining = currentChunk.endPage - pageIndex;
+        if (pagesRemaining <= chunkPrefetchThreshold) {
+          const nextChunkIndex = currentChunkIndex + 1;
+          if (nextChunkIndex < chunks.length) {
+            void ensureChunkTranslations(nextChunkIndex);
+          }
+        }
+      }
+    }
+  }, [
+    pageIndex,
+    pages.length,
+    ensurePageTranslations,
+    pageToChunkIndex,
+    chunks,
+    chunkPrefetchThreshold,
+    ensureChunkTranslations,
+  ]);
 
   const handleToggleSentenceTranslation = async (sentence: Sentence) => {
     const willOpen = !openSentenceTranslations[sentence.index];
     setOpenSentenceTranslations((prev) => ({ ...prev, [sentence.index]: willOpen }));
     if (!willOpen) {
+      return;
+    }
+    const chunkIndex = sentenceToChunkIndex.get(sentence.index);
+    if (typeof chunkIndex === 'number') {
+      await ensureChunkTranslations(chunkIndex);
       return;
     }
     const owningPageIndex = sentenceToPageIndex.get(sentence.index);
@@ -359,7 +494,9 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   }
 
   const includeSentenceSpacing = document.lang_source === 'en';
-  const isCurrentPageLoading = loadingPages[pageIndex] ?? false;
+  const currentChunkIndex = pageToChunkIndex.get(pageIndex);
+  const isCurrentPageLoading =
+    typeof currentChunkIndex === 'number' ? loadingChunks[currentChunkIndex] ?? false : false;
   const canGoPrev = pageIndex > 0;
   const canGoNext = pageIndex < totalPages - 1;
 
@@ -421,8 +558,17 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                 const isActive = activeSentence === sentence.index;
                 const isTranslationOpen = openSentenceTranslations[sentence.index];
                 const owningPageIndex = sentenceToPageIndex.get(sentence.index);
+                const sentenceChunkIndex = sentenceToChunkIndex.get(sentence.index);
+                const fallbackChunkIndex =
+                  typeof owningPageIndex === 'number'
+                    ? pageToChunkIndex.get(owningPageIndex)
+                    : undefined;
                 const pageIsLoading =
-                  typeof owningPageIndex === 'number' ? loadingPages[owningPageIndex] : false;
+                  typeof sentenceChunkIndex === 'number'
+                    ? loadingChunks[sentenceChunkIndex] ?? false
+                    : typeof fallbackChunkIndex === 'number'
+                    ? loadingChunks[fallbackChunkIndex] ?? false
+                    : false;
                 const translationText = sentenceTranslations[sentence.index];
                 return (
                   <span key={sentence.id} className="inline-block align-baseline">
