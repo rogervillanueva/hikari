@@ -18,6 +18,8 @@ import type { TranslationDirection } from '@/providers/translation/base';
 import { translateSentences } from '@/utils/translateSentences';
 import { tokenizeJapanese } from '@/workers/tokenize-ja';
 
+const JAPANESE_CHAR_REGEX = /[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}]/u;
+
 interface ReaderViewProps {
   documentId: string;
 }
@@ -154,7 +156,16 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     const pending = new Set(Object.keys(tokenizingSentences));
     const sentencesNeedingTokens = currentPage
       .flat()
-      .filter((sentence) => !(sentence.tokens && sentence.tokens.length) && !pending.has(sentence.id));
+      .filter((sentence) => {
+        if (pending.has(sentence.id)) {
+          return false;
+        }
+        const tokens = sentence.tokens ?? [];
+        if (!tokens.length) {
+          return true;
+        }
+        return tokensLookLikePerCharacterSegmentation(tokens, sentence.text_raw);
+      });
     if (!sentencesNeedingTokens.length) {
       return;
     }
@@ -880,4 +891,29 @@ export function ReaderView({ documentId }: ReaderViewProps) {
       )}
     </div>
   );
+}
+
+function tokensLookLikePerCharacterSegmentation(tokens: Token[], originalText: string): boolean {
+  const surfaces = tokens.map((token) => token.surface?.trim() ?? '').filter((surface) => surface.length > 0);
+  if (!surfaces.length) {
+    return false;
+  }
+
+  const japaneseTokens = surfaces.filter((surface) => JAPANESE_CHAR_REGEX.test(surface));
+  if (japaneseTokens.length < 4) {
+    return false;
+  }
+
+  const lengths = japaneseTokens.map((surface) => Array.from(surface).length);
+  const totalLength = lengths.reduce((sum, length) => sum + length, 0);
+  const averageLength = totalLength / lengths.length;
+  const singleCharCount = lengths.filter((length) => length === 1).length;
+  const singleCharRatio = singleCharCount / lengths.length;
+
+  if (averageLength > 1.7 && singleCharRatio < 0.6) {
+    return false;
+  }
+
+  const originalJapaneseLength = Array.from(originalText).filter((char) => JAPANESE_CHAR_REGEX.test(char)).length;
+  return originalJapaneseLength >= 6 && singleCharRatio >= 0.4;
 }
