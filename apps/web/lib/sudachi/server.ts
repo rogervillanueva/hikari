@@ -5,7 +5,10 @@ import path from 'node:path';
 import type { TokenizeResponseToken } from '@/workers/tokenize-ja';
 
 const SUDACHI_MODULE_CANDIDATES = ['sudachi', '@sudachi/browser', '@sudachi/sudachi'];
-const DEFAULT_DICTIONARY_PATH = path.join(process.cwd(), 'apps/web/lib/sudachi/system_full.dic');
+const DEFAULT_DICTIONARY_RELATIVE_PATHS = [
+  path.join('lib', 'sudachi', 'system_full.dic'),
+  path.join('apps', 'web', 'lib', 'sudachi', 'system_full.dic'),
+];
 const SUDACHI_SPLIT_MODE = (process.env.SUDACHI_SPLIT_MODE ?? 'C').toUpperCase();
 
 export class SudachiUnavailableError extends Error {
@@ -92,19 +95,29 @@ async function resolveDictionaryPath(): Promise<string> {
     }
   }
 
-  try {
-    await fs.access(DEFAULT_DICTIONARY_PATH, fsConstants.R_OK);
-    cachedDictionaryPath = DEFAULT_DICTIONARY_PATH;
-    return DEFAULT_DICTIONARY_PATH;
-  } catch (error) {
-    throw new SudachiUnavailableError('Sudachi dictionary file not found.', {
-      cause: error,
-      help: [
-        `Place your system_full.dic file at ${DEFAULT_DICTIONARY_PATH}.`,
-        'Alternatively set SUDACHI_DICTIONARY_PATH to the dictionary file location.',
-      ],
-    });
+  const candidatePaths = DEFAULT_DICTIONARY_RELATIVE_PATHS.map((relativePath) =>
+    path.resolve(process.cwd(), relativePath),
+  );
+
+  for (const candidate of candidatePaths) {
+    try {
+      await fs.access(candidate, fsConstants.R_OK);
+      cachedDictionaryPath = candidate;
+      return candidate;
+    } catch {
+      // Continue probing other candidates.
+    }
   }
+
+  const helpPaths = candidatePaths.map((candidate) => `- ${candidate}`);
+  throw new SudachiUnavailableError('Sudachi dictionary file not found.', {
+    help: [
+      'Place your system_full.dic file in one of the default lookup locations:',
+      ...helpPaths,
+      'Alternatively set SUDACHI_DICTIONARY_PATH to the dictionary file location.',
+      `Current working directory: ${process.cwd()}`,
+    ],
+  });
 }
 
 async function loadDictionaryBytes(dictionaryPath: string): Promise<Uint8Array> {
