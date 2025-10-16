@@ -38,6 +38,7 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     sentenceTranslation?: string;
   } | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const document = useMemo(
     () => documents.find((doc) => doc.id === documentId),
@@ -243,32 +244,95 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     }
   };
 
-  const playSentence = async (index: number, sentence: Sentence) => {
-    setActiveSentence(index);
-    const provider = getTtsProvider(ACTIVE_TTS_PROVIDER);
-    const result = await provider.speakSentence(sentence.text_raw, 'ja');
-    const url = await provider.getAudioUrl(result.audioId);
-    const audio = new Audio(url);
-    await audio.play();
-    await new Promise<void>((resolve) => {
-      audio.onended = () => {
-        resolve();
-      };
-    });
-  };
+  const getAudioElement = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return null;
+    }
+    if (!audioRef.current) {
+      const element = new Audio();
+      element.preload = 'auto';
+      audioRef.current = element;
+    }
+    return audioRef.current;
+  }, []);
 
-  const handleMasterPlay = async () => {
+  useEffect(() => {
+    return () => {
+      const audio = audioRef.current;
+      if (audio) {
+        audio.pause();
+        audio.src = '';
+      }
+      playingRef.current = false;
+    };
+  }, []);
+
+  const playSentence = useCallback(
+    async (index: number, sentence: Sentence) => {
+      setActiveSentence(index);
+      const provider = getTtsProvider(ACTIVE_TTS_PROVIDER);
+      const result = await provider.speakSentence(sentence.text_raw, 'ja');
+      const url = await provider.getAudioUrl(result.audioId);
+      const audio = getAudioElement();
+      if (!audio) {
+        return false;
+      }
+
+      audio.pause();
+      audio.currentTime = 0;
+      audio.src = url;
+
+      return await new Promise<boolean>((resolve) => {
+        const handleEnded = () => {
+          audio.removeEventListener('ended', handleEnded);
+          audio.removeEventListener('error', handleError);
+          resolve(true);
+        };
+        const handleError = (event: Event) => {
+          console.error('Failed to play sentence audio', event);
+          audio.removeEventListener('ended', handleEnded);
+          audio.removeEventListener('error', handleError);
+          resolve(false);
+        };
+
+        audio.addEventListener('ended', handleEnded, { once: true });
+        audio.addEventListener('error', handleError, { once: true });
+
+        const playPromise = audio.play();
+        if (playPromise) {
+          void playPromise.catch((error) => {
+            console.error('Audio play rejected', error);
+            audio.removeEventListener('ended', handleEnded);
+            audio.removeEventListener('error', handleError);
+            resolve(false);
+          });
+        } else {
+          resolve(false);
+        }
+      });
+    },
+    [getAudioElement]
+  );
+
+  const handleMasterPlay = useCallback(async () => {
     if (playingRef.current) {
       playingRef.current = false;
+      const audio = audioRef.current;
+      if (audio) {
+        audio.pause();
+      }
       return;
     }
     playingRef.current = true;
     for (let i = activeSentence ?? 0; i < sentenceList.length; i += 1) {
       if (!playingRef.current) break;
-      await playSentence(i, sentenceList[i]);
+      const success = await playSentence(i, sentenceList[i]);
+      if (!success) {
+        break;
+      }
     }
     playingRef.current = false;
-  };
+  }, [activeSentence, sentenceList, playSentence]);
 
   const handleWordClick = async (sentence: Sentence, token: string) => {
     const dictionary = getDictionaryProvider(ACTIVE_DICTIONARY_PROVIDER);
@@ -279,12 +343,14 @@ export function ReaderView({ documentId }: ReaderViewProps) {
       providerName: ACTIVE_TRANSLATION_PROVIDER,
     });
     const topDefinition = definitions[0];
+    const cachedSentenceTranslation = sentenceTranslations[sentence.index];
+    const sentenceTranslation =
+      cachedSentenceTranslation ?? topDefinition?.examples?.[0]?.en ?? undefined;
     setWordPopup({
       sentence,
       token,
       translation: topDefinition?.senses[0] ?? token,
-      sentenceTranslation:
-        topDefinition?.examples?.[0]?.en ?? sentenceTranslations[sentence.index],
+      sentenceTranslation,
     });
   };
 
@@ -421,11 +487,21 @@ export function ReaderView({ documentId }: ReaderViewProps) {
             <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">
               {wordPopup.translation}
             </p>
-            {wordPopup.sentenceTranslation && (
-              <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">
-                {wordPopup.sentenceTranslation}
-              </p>
-            )}
+            {(() => {
+              const sentenceTranslation = wordPopup.sentenceTranslation?.trim();
+              const baseTranslation = wordPopup.translation.trim();
+              if (!sentenceTranslation) {
+                return null;
+              }
+              if (sentenceTranslation === baseTranslation) {
+                return null;
+              }
+              return (
+                <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">
+                  {sentenceTranslation}
+                </p>
+              );
+            })()}
             <p className="mt-4 text-xs text-neutral-500">
               Sentence: {wordPopup.sentence.text_raw}
             </p>
