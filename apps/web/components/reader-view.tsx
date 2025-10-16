@@ -3,14 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Ellipsis, Pause, Play } from 'lucide-react';
-import {
-  ACTIVE_DICTIONARY_PROVIDER,
-  ACTIVE_TRANSLATION_PROVIDER,
-  ACTIVE_TTS_PROVIDER,
-} from '@/lib/config';
+import { ACTIVE_TTS_PROVIDER } from '@/lib/config';
 import { readerConfig } from '@/config/reader';
 import { useDocumentsStore } from '@/store/documents';
-import { getDictionaryProvider } from '@/providers/dictionary/mock';
 import { getTtsProvider } from '@/providers/tts';
 import type { Sentence } from '@/lib/types';
 import type { TranslationDirection } from '@/providers/translation/base';
@@ -31,12 +26,6 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   const [openSentenceTranslations, setOpenSentenceTranslations] = useState<Record<number, boolean>>({});
   const [chunkTranslations, setChunkTranslations] = useState<Record<number, Record<string, string>>>({});
   const [loadingChunks, setLoadingChunks] = useState<Record<number, boolean>>({});
-  const [wordPopup, setWordPopup] = useState<{
-    sentence: Sentence;
-    token: string;
-    translation: string;
-    sentenceTranslation?: string;
-  } | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -469,26 +458,6 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     playingRef.current = false;
   }, [activeSentence, sentenceList, playSentence]);
 
-  const handleWordClick = async (sentence: Sentence, token: string) => {
-    const dictionary = getDictionaryProvider(ACTIVE_DICTIONARY_PROVIDER);
-    const definitions = await dictionary.lookup(token, sourceLanguage, {
-      sentence: sentence.text_raw,
-      documentId: sentence.documentId,
-      direction,
-      providerName: ACTIVE_TRANSLATION_PROVIDER,
-    });
-    const topDefinition = definitions[0];
-    const cachedSentenceTranslation = sentenceTranslations[sentence.index];
-    const sentenceTranslation =
-      cachedSentenceTranslation ?? topDefinition?.examples?.[0]?.en ?? undefined;
-    setWordPopup({
-      sentence,
-      token,
-      translation: topDefinition?.senses[0] ?? token,
-      sentenceTranslation,
-    });
-  };
-
   if (!document) {
     return <p className="p-6 text-sm text-neutral-500">Loading document…</p>;
   }
@@ -582,27 +551,13 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                         <Play className="h-4 w-4" />
                       </button>
                       <span
-                        className={`inline-block rounded px-1 py-0.5 transition-colors ${
+                        className={`inline-block rounded px-1 py-0.5 ${
                           isActive
                             ? 'bg-primary/10 ring-1 ring-primary/40 dark:bg-primary/20'
-                            : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                            : ''
                         }`}
                       >
-                        {sentence.text_raw.split(/(\s+)/).map((token, tokenIndex) => {
-                          if (!token.trim()) {
-                            return <span key={`${sentence.id}-${tokenIndex}`}>{token}</span>;
-                          }
-                          return (
-                            <button
-                              key={`${sentence.id}-${tokenIndex}`}
-                              type="button"
-                              className="rounded px-1 py-0.5 text-left focus:outline-none focus:ring-1 focus:ring-primary"
-                              onClick={() => void handleWordClick(sentence, token)}
-                            >
-                              {token}
-                            </button>
-                          );
-                        })}
+                        {sentence.text_raw}
                       </span>
                       <button
                         type="button"
@@ -626,40 +581,6 @@ export function ReaderView({ documentId }: ReaderViewProps) {
           </article>
         ))}
       </section>
-      {wordPopup && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal>
-          <div className="w-full max-w-md rounded-lg border border-neutral-300 bg-white p-4 shadow-lg dark:border-neutral-700 dark:bg-neutral-950">
-            <h2 className="text-lg font-semibold">{wordPopup.token}</h2>
-            <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">
-              {wordPopup.translation}
-            </p>
-            {(() => {
-              const sentenceTranslation = wordPopup.sentenceTranslation?.trim();
-              const baseTranslation = wordPopup.translation.trim();
-              if (!sentenceTranslation) {
-                return null;
-              }
-              if (sentenceTranslation === baseTranslation) {
-                return null;
-              }
-              return (
-                <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">
-                  {sentenceTranslation}
-                </p>
-              );
-            })()}
-            <p className="mt-4 text-xs text-neutral-500">
-              Sentence: {wordPopup.sentence.text_raw}
-            </p>
-            <button
-              className="mt-4 rounded-md bg-primary px-3 py-2 text-sm font-medium text-white"
-              onClick={() => setWordPopup(null)}
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

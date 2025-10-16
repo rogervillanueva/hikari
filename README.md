@@ -70,7 +70,7 @@ Hikari Reader is a Next.js Progressive Web App for sentence-aligned bilingual re
 ## Overview
 
 * Import long-form Japanese or English text (PDF pipeline stubbed) into IndexedDB for offline-first reading.
-* Sentence-level navigation with per-sentence playback, inline translations, and word popups powered by provider adapters.
+* Sentence-level navigation with per-sentence playback and inline translations powered by provider adapters.
 * Mock translation, dictionary, and TTS providers showcase the adapter pattern and allow the demo to run without paid services.
 * Save vocabulary to a built-in SRS deck and practice with an SM-2-inspired scheduler.
 * Installable PWA skeleton with a vanilla service worker ready to swap for Workbox.
@@ -86,7 +86,7 @@ pnpm dev # starts apps/web on http://localhost:3000
 
 1. Visit `http://localhost:3000/dev/seed` and click **Seed Demo Data**.
 2. Open `/documents` to browse imported documents.
-3. Enter a document to test sentence playback, inline translations, and word popups.
+3. Enter a document to test sentence playback and inline translations.
 4. Explore `/practice` for the SM-2 flashcard loop.
 
 ## Feature Flags & Providers
