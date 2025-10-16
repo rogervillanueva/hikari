@@ -3,7 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Ellipsis, Pause, Play } from 'lucide-react';
-import { ACTIVE_DICTIONARY_PROVIDER, ACTIVE_TTS_PROVIDER } from '@/lib/config';
+import {
+  ACTIVE_DICTIONARY_PROVIDER,
+  ACTIVE_TRANSLATION_PROVIDER,
+  ACTIVE_TTS_PROVIDER,
+} from '@/lib/config';
 import { readerConfig } from '@/config/reader';
 import { useDocumentsStore } from '@/store/documents';
 import { getDictionaryProvider } from '@/providers/dictionary/mock';
@@ -30,7 +34,8 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   const [wordPopup, setWordPopup] = useState<{
     sentence: Sentence;
     token: string;
-    definition: string;
+    translation: string;
+    sentenceTranslation?: string;
   } | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
 
@@ -267,8 +272,20 @@ export function ReaderView({ documentId }: ReaderViewProps) {
 
   const handleWordClick = async (sentence: Sentence, token: string) => {
     const dictionary = getDictionaryProvider(ACTIVE_DICTIONARY_PROVIDER);
-    const definitions = await dictionary.lookup(token, 'ja', { sentence: sentence.text_raw });
-    setWordPopup({ sentence, token, definition: definitions[0]?.senses[0] ?? token });
+    const definitions = await dictionary.lookup(token, sourceLanguage, {
+      sentence: sentence.text_raw,
+      documentId: sentence.documentId,
+      direction,
+      providerName: ACTIVE_TRANSLATION_PROVIDER,
+    });
+    const topDefinition = definitions[0];
+    setWordPopup({
+      sentence,
+      token,
+      translation: topDefinition?.senses[0] ?? token,
+      sentenceTranslation:
+        topDefinition?.examples?.[0]?.en ?? sentenceTranslations[sentence.index],
+    });
   };
 
   if (!document) {
@@ -401,8 +418,17 @@ export function ReaderView({ documentId }: ReaderViewProps) {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal>
           <div className="w-full max-w-md rounded-lg border border-neutral-300 bg-white p-4 shadow-lg dark:border-neutral-700 dark:bg-neutral-950">
             <h2 className="text-lg font-semibold">{wordPopup.token}</h2>
-            <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">{wordPopup.definition}</p>
-            <p className="mt-4 text-xs text-neutral-500">Sentence: {wordPopup.sentence.text_raw}</p>
+            <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">
+              {wordPopup.translation}
+            </p>
+            {wordPopup.sentenceTranslation && (
+              <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">
+                {wordPopup.sentenceTranslation}
+              </p>
+            )}
+            <p className="mt-4 text-xs text-neutral-500">
+              Sentence: {wordPopup.sentence.text_raw}
+            </p>
             <button
               className="mt-4 rounded-md bg-primary px-3 py-2 text-sm font-medium text-white"
               onClick={() => setWordPopup(null)}
