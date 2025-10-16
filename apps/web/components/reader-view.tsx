@@ -2,58 +2,32 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Ellipsis, Pause, Play, Volume2 } from 'lucide-react';
-import {
-  ACTIVE_DICTIONARY_PROVIDER,
-  ACTIVE_TRANSLATION_PROVIDER,
-  ACTIVE_TTS_PROVIDER,
-} from '@/lib/config';
+import { Ellipsis, Pause, Play } from 'lucide-react';
+import { ACTIVE_TTS_PROVIDER } from '@/lib/config';
 import { readerConfig } from '@/config/reader';
 import { useDocumentsStore } from '@/store/documents';
-import { getDictionaryProvider } from '@/providers/dictionary/mock';
 import { getTtsProvider } from '@/providers/tts';
-import type { Definition } from '@/providers/dictionary/types';
-import type { Sentence, Token } from '@/lib/types';
+import type { Sentence } from '@/lib/types';
 import type { TranslationDirection } from '@/providers/translation/base';
 import { translateSentences } from '@/utils/translateSentences';
-import {
-  tokenizeJapanese,
-  subscribeToMorphologyDiagnostics,
-  type MorphologyDiagnostic,
-} from '@/workers/tokenize-ja';
-
-const JAPANESE_CHAR_REGEX = /[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}]/u;
 
 interface ReaderViewProps {
   documentId: string;
 }
-
-type QueuedMorphologyDiagnostic = MorphologyDiagnostic & { id: number };
 
 export function ReaderView({ documentId }: ReaderViewProps) {
   const router = useRouter();
   const documents = useDocumentsStore((state) => state.documents);
   const sentencesByDoc = useDocumentsStore((state) => state.sentences);
   const loadDocuments = useDocumentsStore((state) => state.loadDocuments);
-  const setSentenceTokens = useDocumentsStore((state) => state.setSentenceTokens);
   const [activeSentence, setActiveSentence] = useState<number | null>(null);
   const playingRef = useRef(false);
   const [sentenceTranslations, setSentenceTranslations] = useState<Record<number, string>>({});
   const [openSentenceTranslations, setOpenSentenceTranslations] = useState<Record<number, boolean>>({});
   const [chunkTranslations, setChunkTranslations] = useState<Record<number, Record<string, string>>>({});
   const [loadingChunks, setLoadingChunks] = useState<Record<number, boolean>>({});
-  const [wordPopup, setWordPopup] = useState<{
-    sentence: Sentence;
-    token: Token;
-    definition?: Definition;
-  } | null>(null);
-  const [tokenizingSentences, setTokenizingSentences] = useState<Record<string, boolean>>({});
   const [pageIndex, setPageIndex] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [morphologyDiagnostics, setMorphologyDiagnostics] = useState<QueuedMorphologyDiagnostic[]>([]);
-  const diagnosticsIdRef = useRef(0);
-  const [copiedDiagnosticId, setCopiedDiagnosticId] = useState<number | null>(null);
-  const [downloadingLogs, setDownloadingLogs] = useState(false);
 
   const document = useMemo(
     () => documents.find((doc) => doc.id === documentId),
@@ -81,166 +55,7 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     setOpenSentenceTranslations({});
     setChunkTranslations({});
     setLoadingChunks({});
-    setTokenizingSentences({});
-    setWordPopup(null);
   }, [documentId]);
-
-  useEffect(() => {
-    const unsubscribe = subscribeToMorphologyDiagnostics((diagnostic) => {
-      setMorphologyDiagnostics((prev) => {
-        const existingIndex = prev.findIndex(
-          (item) => item.level === diagnostic.level && item.message === diagnostic.message
-        );
-
-        if (existingIndex !== -1) {
-          const existing = prev[existingIndex];
-          const updated: QueuedMorphologyDiagnostic = {
-            ...existing,
-            ...diagnostic,
-            id: existing.id,
-          };
-
-          return [
-            ...prev.slice(0, existingIndex),
-            updated,
-            ...prev.slice(existingIndex + 1),
-          ];
-        }
-
-        diagnosticsIdRef.current += 1;
-        return [...prev, { ...diagnostic, id: diagnosticsIdRef.current }];
-      });
-    });
-    return unsubscribe;
-  }, [subscribeToMorphologyDiagnostics]);
-
-  useEffect(() => {
-    if (copiedDiagnosticId === null) {
-      return;
-    }
-    const timeout = setTimeout(() => {
-      setCopiedDiagnosticId(null);
-    }, 2000);
-    return () => clearTimeout(timeout);
-  }, [copiedDiagnosticId]);
-
-  const dismissMorphologyDiagnostic = useCallback((id: number) => {
-    setMorphologyDiagnostics((prev) => prev.filter((item) => item.id !== id));
-  }, []);
-
-  const pushDiagnosticsMessage = useCallback(
-    (diagnostic: MorphologyDiagnostic) => {
-      setMorphologyDiagnostics((prev) => {
-        diagnosticsIdRef.current += 1;
-        return [...prev, { ...diagnostic, id: diagnosticsIdRef.current }];
-      });
-    },
-    [setMorphologyDiagnostics],
-  );
-
-  const handleCopyDiagnostic = useCallback(async (id: number, content: string) => {
-    if (!content) {
-      return;
-    }
-    try {
-      if (typeof window === 'undefined') {
-        return;
-      }
-      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-        await navigator.clipboard.writeText(content);
-      } else {
-        const textarea = document.createElement('textarea');
-        textarea.value = content;
-        textarea.setAttribute('readonly', '');
-        textarea.style.position = 'absolute';
-        textarea.style.left = '-9999px';
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textarea);
-      }
-      setCopiedDiagnosticId(id);
-    } catch (error) {
-      console.error('[reader] Failed to copy morphology diagnostic log', error);
-    }
-  }, []);
-
-  const handleDownloadLogs = useCallback(async () => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-    try {
-      setDownloadingLogs(true);
-      const headers: HeadersInit = {};
-      const apiKey = process.env.NEXT_PUBLIC_SERVER_LOG_API_KEY;
-      if (apiKey) {
-        headers['x-api-key'] = apiKey;
-      }
-      const response = await fetch('/api/logs/latest', { headers });
-      if (!response.ok) {
-        const cloned = response.clone();
-        const helpMessages: string[] = [`Request failed with status ${response.status}`];
-        let logContent: string | undefined;
-        try {
-          const data = await response.json();
-          if (data && typeof data === 'object' && 'error' in data && typeof (data as { error?: unknown }).error === 'string') {
-            helpMessages.unshift(String((data as { error?: unknown }).error));
-          }
-          logContent = JSON.stringify(data, null, 2);
-        } catch {
-          try {
-            const text = await cloned.text();
-            if (text) {
-              helpMessages.unshift(text);
-              logContent = text;
-            }
-          } catch (innerError) {
-            logContent = innerError instanceof Error ? innerError.message : String(innerError);
-          }
-        }
-        pushDiagnosticsMessage({
-          level: 'error',
-          message: 'Failed to download server logs.',
-          source: 'logs',
-          help: helpMessages,
-          log: logContent,
-          timestamp: new Date().toISOString(),
-        });
-        return;
-      }
-
-      const blob = await response.blob();
-      const disposition = response.headers.get('content-disposition') ?? '';
-      const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
-      const filename = filenameMatch ? filenameMatch[1] : 'server-log.txt';
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      pushDiagnosticsMessage({
-        level: 'info',
-        message: 'Downloaded server log file.',
-        source: 'logs',
-        help: [`Saved as ${filename}`],
-        timestamp: new Date().toISOString(),
-      });
-    } catch (error) {
-      pushDiagnosticsMessage({
-        level: 'error',
-        message: 'Failed to download server logs.',
-        source: 'logs',
-        help: ['Check the log output below for details.'],
-        log: error instanceof Error ? error.stack ?? error.message : String(error),
-        timestamp: new Date().toISOString(),
-      });
-    } finally {
-      setDownloadingLogs(false);
-    }
-  }, [pushDiagnosticsMessage]);
 
   const paragraphs = useMemo(() => {
     if (!sentenceList.length) return [] as Sentence[][];
@@ -315,57 +130,6 @@ export function ReaderView({ documentId }: ReaderViewProps) {
 
   const totalPages = pages.length;
   const currentPage = pages[pageIndex] ?? [];
-
-  useEffect(() => {
-    if (!currentPage.length) {
-      return;
-    }
-    const pending = new Set(Object.keys(tokenizingSentences));
-    const sentencesNeedingTokens = currentPage
-      .flat()
-      .filter((sentence) => {
-        if (pending.has(sentence.id)) {
-          return false;
-        }
-        const tokens = sentence.tokens ?? [];
-        if (!tokens.length) {
-          return true;
-        }
-        return tokensLookLikePerCharacterSegmentation(tokens, sentence.text_raw);
-      });
-    if (!sentencesNeedingTokens.length) {
-      return;
-    }
-    sentencesNeedingTokens.forEach((sentence) => {
-      setTokenizingSentences((prev) => ({ ...prev, [sentence.id]: true }));
-      void tokenizeJapanese({ text: sentence.text_raw })
-        .then(({ tokens }) => {
-          const enriched: Token[] = tokens.map((token, index) => ({
-            id: `${sentence.id}-${index}`,
-            sentenceId: sentence.id,
-            index,
-            surface: token.surface,
-            base: token.base ?? token.surface,
-            reading: token.reading,
-            pos: token.pos,
-            features: token.features,
-            conjugation: token.conjugation,
-            pitch: token.pitch,
-            isWordLike: token.isWordLike ?? /\S/u.test(token.surface),
-          }));
-          return setSentenceTokens(sentence.documentId, sentence.id, enriched);
-        })
-        .catch((error) => {
-          console.error('[reader] Failed to tokenize sentence', sentence.id, error);
-        })
-        .finally(() => {
-          setTokenizingSentences((prev) => {
-            const { [sentence.id]: _omitted, ...rest } = prev;
-            return rest;
-          });
-        });
-    });
-  }, [currentPage, setSentenceTokens, tokenizingSentences]);
 
   type TranslationChunk = {
     index: number;
@@ -631,7 +395,7 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     async (index: number, sentence: Sentence) => {
       setActiveSentence(index);
       const provider = getTtsProvider(ACTIVE_TTS_PROVIDER);
-      const result = await provider.speakSentence(sentence.text_raw, sourceLanguage);
+      const result = await provider.speakSentence(sentence.text_raw, 'ja');
       const url = await provider.getAudioUrl(result.audioId);
       const audio = getAudioElement();
       if (!audio) {
@@ -671,47 +435,7 @@ export function ReaderView({ documentId }: ReaderViewProps) {
         }
       });
     },
-    [getAudioElement, sourceLanguage]
-  );
-
-  const playWordAudio = useCallback(
-    async (token: Token, definition?: Definition) => {
-      const spokenText = definition?.audio?.text ?? token.surface;
-      if (!spokenText?.trim()) {
-        return false;
-      }
-      const audio = getAudioElement();
-      if (!audio) {
-        return false;
-      }
-      try {
-        if (definition?.audio?.url) {
-          audio.pause();
-          audio.currentTime = 0;
-          audio.src = definition.audio.url;
-          const playPromise = audio.play();
-          if (playPromise) {
-            await playPromise;
-          }
-          return true;
-        }
-        const provider = getTtsProvider(ACTIVE_TTS_PROVIDER);
-        const result = await provider.speakSentence(spokenText, sourceLanguage);
-        const url = await provider.getAudioUrl(result.audioId);
-        audio.pause();
-        audio.currentTime = 0;
-        audio.src = url;
-        const playPromise = audio.play();
-        if (playPromise) {
-          await playPromise;
-        }
-        return true;
-      } catch (error) {
-        console.error('Failed to play word audio', error);
-        return false;
-      }
-    },
-    [getAudioElement, sourceLanguage]
+    [getAudioElement]
   );
 
   const handleMasterPlay = useCallback(async () => {
@@ -734,45 +458,6 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     playingRef.current = false;
   }, [activeSentence, sentenceList, playSentence]);
 
-  const handleWordClick = async (sentence: Sentence, token: Token) => {
-    if (!token.isWordLike) {
-      return;
-    }
-    const dictionary = getDictionaryProvider(ACTIVE_DICTIONARY_PROVIDER);
-    const lookupTerm = token.base ?? token.surface;
-    let definitions: Definition[] = [];
-    try {
-      definitions = await dictionary.lookup(lookupTerm, sourceLanguage, {
-        sentence: sentence.text_raw,
-        documentId: sentence.documentId,
-        direction,
-        providerName: ACTIVE_TRANSLATION_PROVIDER,
-        token,
-      });
-    } catch (error) {
-      console.error('Dictionary lookup failed', error);
-    }
-    const topDefinition = definitions[0] ?? {
-      term: lookupTerm,
-      baseForm: token.base ?? token.surface,
-      reading: token.reading,
-      senses: [lookupTerm],
-      partOfSpeech: token.features?.length
-        ? token.features
-        : token.pos
-        ? [token.pos]
-        : undefined,
-      conjugation: token.conjugation,
-      pitch: token.pitch,
-      provider: ACTIVE_DICTIONARY_PROVIDER,
-    };
-    setWordPopup({
-      sentence,
-      token,
-      definition: topDefinition,
-    });
-  };
-
   if (!document) {
     return <p className="p-6 text-sm text-neutral-500">Loading document…</p>;
   }
@@ -785,8 +470,7 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   const canGoNext = pageIndex < totalPages - 1;
 
   return (
-    <>
-      <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4">
       <header className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
         <div>
           <h1 className="text-2xl font-semibold">{document.title}</h1>
@@ -867,57 +551,13 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                         <Play className="h-4 w-4" />
                       </button>
                       <span
-                        className={`inline-flex flex-wrap items-baseline rounded px-1 py-0.5 transition-colors ${
+                        className={`inline-block rounded px-1 py-0.5 ${
                           isActive
                             ? 'bg-primary/10 ring-1 ring-primary/40 dark:bg-primary/20'
-                            : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                            : ''
                         }`}
                       >
-                        {(() => {
-                          const tokensToRender: Token[] = sentence.tokens?.length
-                            ? sentence.tokens
-                            : [
-                                {
-                                  id: `${sentence.id}-fallback`,
-                                  sentenceId: sentence.id,
-                                  index: 0,
-                                  surface: sentence.text_raw,
-                                  isWordLike: true,
-                                },
-                              ];
-                          const isJapaneseSentence = JAPANESE_CHAR_REGEX.test(
-                            sentence.text_raw ?? ''
-                          );
-                          return tokensToRender.map((token) => {
-                            const surface = token.surface ?? '';
-                            if (!token.isWordLike) {
-                              if (isJapaneseSentence && surface.trim().length === 0) {
-                                return null;
-                              }
-                              return (
-                                <span key={token.id} className="whitespace-pre">
-                                  {surface}
-                                </span>
-                              );
-                            }
-                            const tooltipParts = [
-                              token.base && token.base !== surface ? `Base: ${token.base}` : null,
-                              token.reading ? `Reading: ${token.reading}` : null,
-                              token.pos ? token.pos : null,
-                            ].filter(Boolean);
-                            return (
-                              <button
-                                key={token.id}
-                                type="button"
-                                className="relative inline-flex items-center rounded py-0.5 text-left leading-tight transition-all duration-150 ease-out hover:-translate-y-0.5 hover:bg-primary/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 dark:hover:bg-primary/20"
-                                onClick={() => void handleWordClick(sentence, token)}
-                                title={tooltipParts.length ? tooltipParts.join(' • ') : undefined}
-                              >
-                                {surface}
-                              </button>
-                            );
-                          });
-                        })()}
+                        {sentence.text_raw}
                       </span>
                       <button
                         type="button"
@@ -941,231 +581,6 @@ export function ReaderView({ documentId }: ReaderViewProps) {
           </article>
         ))}
       </section>
-      {wordPopup && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal>
-          {(() => {
-            const { token, definition } = wordPopup;
-            const baseForm = definition?.baseForm ?? token.base ?? token.surface;
-            const reading = definition?.reading ?? token.reading;
-            const senses = definition?.senses?.length ? definition.senses : [baseForm];
-            const partOfSpeech = definition?.partOfSpeech ?? (token.pos ? [token.pos] : undefined);
-            const conjugationForm = definition?.conjugation?.form ?? token.conjugation?.form;
-            const conjugationDescription =
-              definition?.conjugation?.description ?? token.conjugation?.description;
-            const conjugationType = definition?.conjugation?.type ?? token.conjugation?.type;
-            const pitchInfo = definition?.pitch ?? token.pitch;
-            const notes = definition?.notes ?? [];
-            const featureTags = Array.from(
-              new Set(
-                [
-                  ...(partOfSpeech ?? []),
-                  ...((token.features ?? []).filter(Boolean) as string[]),
-                ].filter(Boolean)
-              )
-            );
-            const normalizedSurface = token.surface?.trim() ?? '';
-            const normalizedBaseForm = typeof baseForm === 'string' ? baseForm.trim() : '';
-            const normalizedConjugationForm =
-              typeof conjugationForm === 'string' ? conjugationForm.trim() : '';
-            const showCurrentForm =
-              normalizedSurface.length > 0 &&
-              normalizedBaseForm.length > 0 &&
-              normalizedSurface !== normalizedBaseForm;
-            const showConjugationDetails = Boolean(
-              (normalizedConjugationForm && normalizedConjugationForm.toLowerCase() !== 'dictionary') ||
-                conjugationType ||
-                conjugationDescription
-            );
-            return (
-              <div className="w-full max-w-md rounded-lg border border-neutral-300 bg-white p-4 shadow-lg dark:border-neutral-700 dark:bg-neutral-950">
-                <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
-                  {baseForm}
-                </h2>
-                {reading && (
-                  <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-300">{reading}</p>
-                )}
-                {featureTags.length ? (
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {featureTags.map((tag) => (
-                      <span
-                        key={tag}
-                        className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-                {pitchInfo ? (
-                  <p className="mt-2 text-xs uppercase tracking-wide text-neutral-400">
-                    Pitch: {pitchInfo.pattern}
-                    {pitchInfo.accents?.length ? ` (accent at ${pitchInfo.accents.join(', ')})` : ''}
-                  </p>
-                ) : null}
-                <div className="mt-3 space-y-3 text-neutral-800 dark:text-neutral-100">
-                  {(showCurrentForm || showConjugationDetails) && (
-                    <div>
-                      <p className="text-xs uppercase tracking-wide text-neutral-400">Current form</p>
-                      {showCurrentForm && (
-                        <p className="text-base font-medium">{token.surface}</p>
-                      )}
-                      {showConjugationDetails && (
-                        <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                          {[conjugationType, normalizedConjugationForm, conjugationDescription]
-                            .filter((value) =>
-                              typeof value === 'string' ? value.trim().length > 0 : Boolean(value)
-                            )
-                            .join(' • ')}
-                        </p>
-                      )}
-                    </div>
-                  )}
-                  <div>
-                    <p className="text-xs uppercase tracking-wide text-neutral-400">Definition</p>
-                    <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-neutral-700 dark:text-neutral-200">
-                      {senses.map((sense, index) => (
-                        <li key={`${token.id}-sense-${index}`}>{sense}</li>
-                      ))}
-                    </ul>
-                  </div>
-                  {notes.length ? (
-                    <div>
-                      <p className="text-xs uppercase tracking-wide text-neutral-400">Notes</p>
-                      <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-neutral-600 dark:text-neutral-300">
-                        {notes.map((note, index) => (
-                          <li key={`${token.id}-note-${index}`}>{note}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
-                </div>
-                <p className="mt-4 text-xs text-neutral-500">
-                  Dictionary provider: {definition?.provider ?? ACTIVE_DICTIONARY_PROVIDER}
-                </p>
-                <div className="mt-4 flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-2 rounded-md border border-neutral-300 px-3 py-2 text-sm font-medium text-neutral-700 transition-colors hover:border-primary hover:text-primary dark:border-neutral-700 dark:text-neutral-200"
-                    onClick={() => void playWordAudio(token, definition)}
-                  >
-                    <Volume2 className="h-4 w-4" /> Play audio
-                  </button>
-                  <button
-                    className="rounded-md bg-primary px-3 py-2 text-sm font-medium text-white"
-                    onClick={() => setWordPopup(null)}
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-            );
-          })()}
-        </div>
-      )}
-      </div>
-      <div className="fixed right-4 top-4 z-50 flex max-w-sm flex-col gap-3">
-        <button
-          type="button"
-          className="rounded-md border border-neutral-300 bg-white/80 px-3 py-2 text-xs font-medium uppercase tracking-wide text-neutral-700 shadow-sm transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-900/80 dark:text-neutral-100"
-          onClick={() => void handleDownloadLogs()}
-          disabled={downloadingLogs}
-        >
-          {downloadingLogs ? 'Preparing logs…' : 'Download server logs'}
-        </button>
-        {morphologyDiagnostics.map((diagnostic) => {
-            const toneClasses =
-              diagnostic.level === 'error'
-                ? 'border-red-300 bg-red-50 text-red-900 dark:border-red-600/60 dark:bg-red-950/60 dark:text-red-100'
-                : diagnostic.level === 'warning'
-                ? 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100'
-                : 'border-blue-300 bg-blue-50 text-blue-900 dark:border-blue-500/60 dark:bg-blue-950/50 dark:text-blue-100';
-            const fallbackLogParts = [
-              diagnostic.timestamp ? `timestamp: ${diagnostic.timestamp}` : null,
-              diagnostic.message ? `message: ${diagnostic.message}` : null,
-              ...(diagnostic.help ?? []),
-            ].filter((part): part is string => !!part);
-            const logContent = diagnostic.log ?? fallbackLogParts.join('\n');
-            return (
-              <div
-                key={diagnostic.id}
-                className={`relative overflow-hidden rounded-md border p-3 shadow-lg transition-all ${toneClasses}`}
-              >
-                <div className="flex items-start gap-2">
-                  <div className="flex-1 space-y-1 text-sm">
-                    <p className="font-medium">
-                      {diagnostic.message}
-                      {diagnostic.source ? ` (${diagnostic.source})` : ''}
-                    </p>
-                    {diagnostic.timestamp ? (
-                      <p className="text-[11px] font-mono uppercase tracking-wide opacity-75">
-                        {diagnostic.timestamp}
-                      </p>
-                    ) : null}
-                    {diagnostic.help && diagnostic.help.length > 0 && (
-                      <ul className="list-inside list-disc space-y-0.5 text-xs opacity-90">
-                        {diagnostic.help.map((hint, index) => (
-                          <li key={`${diagnostic.id}-hint-${index}`}>{hint}</li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                  <div className="flex flex-col items-end gap-1">
-                    <button
-                      type="button"
-                      className="rounded bg-black/10 px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-current transition hover:bg-black/20 dark:bg-white/10 dark:hover:bg-white/20"
-                      onClick={() => handleCopyDiagnostic(diagnostic.id, logContent)}
-                    >
-                      Copy
-                    </button>
-                    <button
-                      type="button"
-                      className="-m-1 rounded-full p-1 text-xs text-current transition-opacity hover:opacity-70"
-                      aria-label="Dismiss morphology warning"
-                      onClick={() => dismissMorphologyDiagnostic(diagnostic.id)}
-                    >
-                      ×
-                    </button>
-                  </div>
-                </div>
-                {logContent ? (
-                  <pre className="mt-2 max-h-48 overflow-auto rounded-md bg-black/10 p-2 text-[11px] leading-relaxed text-current dark:bg-white/10">
-                    {logContent}
-                  </pre>
-                ) : null}
-                {copiedDiagnosticId === diagnostic.id ? (
-                  <p className="mt-2 text-[10px] font-semibold uppercase tracking-wide opacity-80">
-                    Copied log to clipboard
-                  </p>
-                ) : null}
-              </div>
-            );
-          })}
-      </div>
-    </>
+    </div>
   );
-}
-
-function tokensLookLikePerCharacterSegmentation(tokens: Token[], originalText: string): boolean {
-  const surfaces = tokens.map((token) => token.surface?.trim() ?? '').filter((surface) => surface.length > 0);
-  if (!surfaces.length) {
-    return false;
-  }
-
-  const japaneseTokens = surfaces.filter((surface) => JAPANESE_CHAR_REGEX.test(surface));
-  if (japaneseTokens.length < 4) {
-    return false;
-  }
-
-  const lengths = japaneseTokens.map((surface) => Array.from(surface).length);
-  const totalLength = lengths.reduce((sum, length) => sum + length, 0);
-  const averageLength = totalLength / lengths.length;
-  const singleCharCount = lengths.filter((length) => length === 1).length;
-  const singleCharRatio = singleCharCount / lengths.length;
-
-  if (averageLength > 1.7 && singleCharRatio < 0.6) {
-    return false;
-  }
-
-  const originalJapaneseLength = Array.from(originalText).filter((char) => JAPANESE_CHAR_REGEX.test(char)).length;
-  return originalJapaneseLength >= 6 && singleCharRatio >= 0.4;
 }

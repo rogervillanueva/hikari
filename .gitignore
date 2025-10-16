@@ -9,7 +9,6 @@ dist
 .env.*
 !**/.env.local.example
 *.log
-apps/web/.logs/
 
 # binaries (Codex PR safe)
 *.png
@@ -27,7 +26,3 @@ apps/web/.logs/
 *.otf
 *.woff
 *.woff2
-
-# Sudachi dictionaries (binary assets provided locally)
-apps/web/lib/sudachi/*.dic
-apps/web/lib/sudachi/*.dic.*

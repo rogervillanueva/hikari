@@ -63,71 +63,6 @@ The Dexie schema is automatically created the first time the reader runs in a
 browser context. When using the real Azure adapter make sure to enable the
 Translator resource in the selected region and grant the API key access to the
 Text Translation API.
-
-### Word-level dictionary & morphology configuration
-
-The reader now tokenises each sentence and opens word-level popups with
-dictionary, conjugation, audio, and (when available) pitch-accent data. The
-default demo uses `Intl.Segmenter` for coarse tokenisation and the mock
-dictionary provider, which is enough to explore the UI but does not return full
-grammar metadata. To plug in production services:
-
-1. **Morphology API** — enable the built-in Sudachi-powered tokenizer by
-   pointing the client at `/api/morphology` and providing a dictionary file.
-   The worker expects `{ tokens: [{ surface, base, reading, pos, features,
-   conjugation, pitch }] }` so any compatible analyzer can be swapped in later.
-   Start with:
-
-   ```bash
-   NEXT_PUBLIC_MORPHOLOGY_ENDPOINT=/api/morphology
-   NEXT_PUBLIC_MORPHOLOGY_API_KEY=optional-shared-secret
-   SUDACHI_SPLIT_MODE=C
-   # Optional override when the dictionary lives elsewhere
-   # SUDACHI_DICTIONARY_PATH=/absolute/path/to/system_full.dic
-   ```
-
-   Steps:
-
-  - Install the Sudachi WASM bindings in the web app: `pnpm --filter web add
-    sudachi`. If you vendor a different Sudachi-compatible build, set
-    `SUDACHI_MODULE` in `.env.local` to its package name so the loader tries it
-    before the bundled defaults. If Sudachi is unavailable, the API route
-    automatically falls back to the bundled Kuromoji tokenizer—install it with
-    `pnpm --filter web add kuromoji @types/kuromoji@0.1.3` so the fallback can
-    spin up successfully.
-   - Download the latest Sudachi Full dictionary and place the extracted
-     `system_full.dic` under `apps/web/lib/sudachi/` (the directory is gitignored)
-     or set `SUDACHI_DICTIONARY_PATH` to its location.
-   - Restart `pnpm dev` so the API route can initialise the tokenizer.
-   - Re-import or trigger the retokenisation workflow for existing documents to
-     refresh stored tokens with Sudachi output.
-   - The morphology API and diagnostics toast now mirror the same events in
-     `apps/web/.logs/server-YYYY-MM-DD.log` (or the directory specified by
-     `SERVER_LOG_DIR`). Use the **Download server logs** button in the reader’s
-     diagnostics toast or call `GET /api/logs/latest` (include the optional
-     `SERVER_LOG_API_KEY` header when configured) to retrieve a text copy you can
-     share for debugging.
-
-   Prefer a different analyzer (SudachiPy, Kuromoji, MeCab, etc.)? Expose it via
-   an HTTP endpoint that returns the same token payload and update
-   `NEXT_PUBLIC_MORPHOLOGY_ENDPOINT` accordingly.
-
-2. **Dictionary data** — replace `providers/dictionary/mock.ts` with a real
-   dictionary (JMdict, commercial API, etc.). Populate `Definition.senses`,
-   `partOfSpeech`, `notes`, `pitch`, and `audio.url`/`audio.text` for richer
-   popups.
-
-3. **Pitch accent** — return `{ pattern: string; accents: number[] }` within the
-   morphology or dictionary response. The popup renders the pattern string and
-   accent positions when supplied.
-
-4. **Audio** — the popup reuses the active TTS provider. If your dictionary
-   returns pre-recorded audio, set `definition.audio.url` and the play button
-   will stream it instead of synthesising speech.
-
-Without custom providers the UI still tokenises via `Intl.Segmenter`, defaults
-the base form to the clicked surface, and falls back to inline translation for
-definitions.
 # Hikari Reader
 
 Hikari Reader is a Next.js Progressive Web App for sentence-aligned bilingual reading between Japanese and English. V1 focuses on client-first storage, mock language services, and an installable PWA scaffold so teams can plug in production-grade providers later without refactoring.
@@ -135,7 +70,7 @@ Hikari Reader is a Next.js Progressive Web App for sentence-aligned bilingual re
 ## Overview
 
 * Import long-form Japanese or English text (PDF pipeline stubbed) into IndexedDB for offline-first reading.
-* Sentence-level navigation with per-sentence playback, inline translations, and word popups powered by provider adapters.
+* Sentence-level navigation with per-sentence playback and inline translations powered by provider adapters.
 * Mock translation, dictionary, and TTS providers showcase the adapter pattern and allow the demo to run without paid services.
 * Save vocabulary to a built-in SRS deck and practice with an SM-2-inspired scheduler.
 * Installable PWA skeleton with a vanilla service worker ready to swap for Workbox.
@@ -151,7 +86,7 @@ pnpm dev # starts apps/web on http://localhost:3000
 
 1. Visit `http://localhost:3000/dev/seed` and click **Seed Demo Data**.
 2. Open `/documents` to browse imported documents.
-3. Enter a document to test sentence playback, inline translations, and word popups.
+3. Enter a document to test sentence playback and inline translations.
 4. Explore `/practice` for the SM-2 flashcard loop.
 
 ## Feature Flags & Providers
