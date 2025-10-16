@@ -2,7 +2,9 @@ import { hikariDb, HikariDexie, SentenceRecord } from "../db/client";
 import { translationEnv } from "../config/env";
 import { getTranslationProvider } from "../providers/translation";
 import {
+  TranslationBatchResult,
   TranslationDirection,
+  TranslationEstimate,
   TranslationSentence,
 } from "../providers/translation/base";
 
@@ -27,6 +29,14 @@ const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_MAX_CHARACTERS_PER_BATCH = 4500;
 
 type TranslationField = "translation_en" | "translation_ja";
+
+const directionToLanguages: Record<
+  TranslationDirection,
+  { src: "ja" | "en"; tgt: "ja" | "en" }
+> = {
+  "ja-en": { src: "ja", tgt: "en" },
+  "en-ja": { src: "en", tgt: "ja" },
+};
 
 const fieldForDirection = (direction: TranslationDirection): TranslationField =>
   direction === "ja-en" ? "translation_en" : "translation_ja";
@@ -67,6 +77,58 @@ const chunkSentences = (
   return batches;
 };
 
+interface ProxyBatchArgs {
+  batch: TranslationSentence[];
+  direction: TranslationDirection;
+  documentId: string;
+  estimate: TranslationEstimate;
+  abortSignal?: AbortSignal;
+  providerName: string;
+}
+
+async function proxyTranslateBatchThroughApi(
+  args: ProxyBatchArgs
+): Promise<TranslationBatchResult> {
+  const { batch, direction, documentId, estimate, abortSignal, providerName } = args;
+  const languages = directionToLanguages[direction];
+  const response = await fetch("/api/translate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sentences: batch.map((sentence) => sentence.text),
+      src: languages.src,
+      tgt: languages.tgt,
+      documentId,
+      provider: providerName,
+    }),
+    signal: abortSignal,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Translation request failed: ${response.status} ${errorText}`);
+  }
+
+  const payload = (await response.json()) as {
+    translations: string[];
+    consumedBudgetCents?: number;
+  };
+
+  const translations = batch.map((sentence, index) => ({
+    id: sentence.id,
+    translatedText: payload.translations[index] ?? "",
+  }));
+
+  return {
+    translations,
+    consumedBudgetCents: payload.consumedBudgetCents ?? estimate.estimatedCostCents,
+    providerMetadata: {
+      via: "api",
+      billableCharacters: estimate.billableCharacters,
+    },
+  };
+}
+
 export const translateSentences = async (
   params: TranslateSentencesParams
 ): Promise<TranslateSentencesResult> => {
@@ -86,6 +148,10 @@ export const translateSentences = async (
   const translationField = fieldForDirection(direction);
 
   const results: Record<string, string> = {};
+
+  const shouldProxyThroughApi =
+    provider.name === "azure-translation" &&
+    (!translationEnv.azure.endpoint || !translationEnv.azure.apiKey);
 
   if (!sentences.length) {
     return { translations: results, consumedBudgetCents: 0 };
@@ -135,13 +201,22 @@ export const translateSentences = async (
       throw new Error("Document translation budget exhausted");
     }
 
-    const response = await provider.translateBatch({
-      sentences: batch,
-      direction,
-      documentId,
-      remainingBudgetCents: remainingBudget,
-      abortSignal,
-    });
+    const response = shouldProxyThroughApi
+      ? await proxyTranslateBatchThroughApi({
+          batch,
+          direction,
+          documentId,
+          estimate,
+          abortSignal,
+          providerName: provider.name,
+        })
+      : await provider.translateBatch({
+          sentences: batch,
+          direction,
+          documentId,
+          remainingBudgetCents: remainingBudget,
+          abortSignal,
+        });
 
     consumedBudget += response.consumedBudgetCents;
     remainingBudget -= response.consumedBudgetCents;

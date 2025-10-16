@@ -5,11 +5,12 @@ import type { TranslationDirection, TranslationSentence } from '@/providers/tran
 
 export async function POST(request: Request) {
   const body = await request.json();
-  const { sentences, src = 'ja', tgt = 'en', documentId } = body as {
+  const { sentences, src = 'ja', tgt = 'en', documentId, provider: providerName } = body as {
     sentences: string[];
     src: 'ja' | 'en';
     tgt: 'ja' | 'en';
     documentId?: string;
+    provider?: string;
   };
   if (!Array.isArray(sentences)) {
     return NextResponse.json({ error: 'Sentences array is required' }, { status: 400 });
@@ -20,13 +21,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: `Unsupported translation direction: ${src}-${tgt}` }, { status: 400 });
   }
 
-  const provider = getTranslationProvider();
+  const provider = getTranslationProvider(providerName);
   const requestSentences: TranslationSentence[] = sentences.map((text, index) => ({
     id: `api-${index}`,
     text,
   }));
 
-  const { translations } = await provider.translateBatch({
+  const { translations, consumedBudgetCents } = await provider.translateBatch({
     sentences: requestSentences,
     direction,
     documentId: documentId ?? 'api-request',
@@ -38,5 +39,9 @@ export async function POST(request: Request) {
     return match?.translatedText ?? '';
   });
 
-  return NextResponse.json({ translations: orderedTranslations, provider: provider.name });
+  return NextResponse.json({
+    translations: orderedTranslations,
+    provider: provider.name,
+    consumedBudgetCents,
+  });
 }

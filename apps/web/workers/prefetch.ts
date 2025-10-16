@@ -1,22 +1,23 @@
-import { getTranslationProvider } from '@/providers/translation';
 import { translationEnv } from '@/config/env';
-import type { TranslationSentence } from '@/providers/translation/base';
 
 export async function prefetchWindow(sentences: string[]) {
-  const provider = getTranslationProvider();
+  const providerName = translationEnv.defaultProvider;
   console.info('[prefetch] translating window', sentences.length);
-  const requestSentences: TranslationSentence[] = sentences.map((text, index) => ({
-    id: `prefetch-${index}`,
-    text,
-  }));
-  const { translations } = await provider.translateBatch({
-    sentences: requestSentences,
-    direction: 'ja-en',
-    documentId: 'prefetch',
-    remainingBudgetCents: translationEnv.documentBudgetCents,
+  const response = await fetch('/api/translate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sentences,
+      src: 'ja',
+      tgt: 'en',
+      documentId: 'prefetch',
+      provider: providerName,
+    }),
   });
-  return requestSentences.map((sentence) => {
-    const match = translations.find((entry) => entry.id === sentence.id);
-    return match?.translatedText ?? '';
-  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Prefetch translation failed: ${response.status} ${errorText}`);
+  }
+  const payload = (await response.json()) as { translations: string[] };
+  return payload.translations;
 }

@@ -200,6 +200,7 @@ export function ReaderView({ documentId }: ReaderViewProps) {
         });
       } catch (error) {
         console.error('Failed to translate page', error);
+        setPageTranslations((prev) => ({ ...prev, [targetPage]: {} }));
       } finally {
         setLoadingPages((prev) => {
           const next = { ...prev };
