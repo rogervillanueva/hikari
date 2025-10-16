@@ -28,6 +28,37 @@ interface RemoteTokenPayload extends TokenizeResponseToken {
   features?: string[];
 }
 
+export interface MorphologyDiagnostic {
+  level: 'info' | 'warning' | 'error';
+  message: string;
+  help?: string[];
+  source?: string;
+}
+
+type MorphologyDiagnosticsListener = (diagnostic: MorphologyDiagnostic) => void;
+
+const morphologyDiagnosticsListeners = new Set<MorphologyDiagnosticsListener>();
+
+export function subscribeToMorphologyDiagnostics(listener: MorphologyDiagnosticsListener): () => void {
+  morphologyDiagnosticsListeners.add(listener);
+  return () => {
+    morphologyDiagnosticsListeners.delete(listener);
+  };
+}
+
+function emitMorphologyDiagnostic(diagnostic: MorphologyDiagnostic) {
+  if (!diagnostic.message) {
+    return;
+  }
+  morphologyDiagnosticsListeners.forEach((listener) => {
+    try {
+      listener(diagnostic);
+    } catch (error) {
+      console.error('[tokenize-ja] morphology diagnostics listener failed', error);
+    }
+  });
+}
+
 const MORPHOLOGY_ENDPOINT = process.env.NEXT_PUBLIC_MORPHOLOGY_ENDPOINT;
 const MORPHOLOGY_API_KEY = process.env.NEXT_PUBLIC_MORPHOLOGY_API_KEY;
 
@@ -61,17 +92,39 @@ async function tryRemoteTokenizer(text: string): Promise<TokenizeResponseToken[]
     });
 
     if (!response.ok) {
+      let details: { error?: string; help?: string[] } | null = null;
+      try {
+        details = (await response.json()) as { error?: string; help?: string[] } | null;
+      } catch (error) {
+        // Ignore body parsing errors and fall back to a generic message.
+      }
+      const message = details?.error ?? `Remote tokenizer returned status ${response.status}.`;
+      emitMorphologyDiagnostic({ level: 'error', message, help: details?.help });
       console.warn('[tokenize-ja] remote tokenizer returned', response.status);
       return null;
     }
 
-    const payload = (await response.json()) as { tokens?: RemoteTokenPayload[] } | null;
+    const payload = (await response.json()) as {
+      tokens?: RemoteTokenPayload[];
+      diagnostics?: MorphologyDiagnostic[];
+      source?: string;
+    } | null;
+
+    if (payload?.diagnostics?.length) {
+      payload.diagnostics.forEach((diagnostic) => emitMorphologyDiagnostic(diagnostic));
+    }
+
     if (!payload?.tokens?.length) {
       return null;
     }
 
     if (looksLikePerCharacterSegmentation(payload.tokens, text)) {
       console.warn('[tokenize-ja] remote tokenizer returned low-quality segmentation, falling back');
+      emitMorphologyDiagnostic({
+        level: 'warning',
+        message: 'Remote tokenizer returned low-quality segmentation. Falling back to heuristics.',
+        source: payload?.source,
+      });
       return null;
     }
 
@@ -95,6 +148,11 @@ async function tryRemoteTokenizer(text: string): Promise<TokenizeResponseToken[]
     });
   } catch (error) {
     console.error('[tokenize-ja] remote tokenizer failed', error);
+    emitMorphologyDiagnostic({
+      level: 'error',
+      message: 'Failed to reach remote tokenizer. Falling back to heuristics.',
+      help: [error instanceof Error ? error.message : String(error)],
+    });
     return null;
   }
 }

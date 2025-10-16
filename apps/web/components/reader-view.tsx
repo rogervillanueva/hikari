@@ -16,13 +16,19 @@ import type { Definition } from '@/providers/dictionary/types';
 import type { Sentence, Token } from '@/lib/types';
 import type { TranslationDirection } from '@/providers/translation/base';
 import { translateSentences } from '@/utils/translateSentences';
-import { tokenizeJapanese } from '@/workers/tokenize-ja';
+import {
+  tokenizeJapanese,
+  subscribeToMorphologyDiagnostics,
+  type MorphologyDiagnostic,
+} from '@/workers/tokenize-ja';
 
 const JAPANESE_CHAR_REGEX = /[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}]/u;
 
 interface ReaderViewProps {
   documentId: string;
 }
+
+type QueuedMorphologyDiagnostic = MorphologyDiagnostic & { id: number };
 
 export function ReaderView({ documentId }: ReaderViewProps) {
   const router = useRouter();
@@ -44,6 +50,8 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   const [tokenizingSentences, setTokenizingSentences] = useState<Record<string, boolean>>({});
   const [pageIndex, setPageIndex] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [morphologyDiagnostics, setMorphologyDiagnostics] = useState<QueuedMorphologyDiagnostic[]>([]);
+  const diagnosticsIdRef = useRef(0);
 
   const document = useMemo(
     () => documents.find((doc) => doc.id === documentId),
@@ -74,6 +82,23 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     setTokenizingSentences({});
     setWordPopup(null);
   }, [documentId]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeToMorphologyDiagnostics((diagnostic) => {
+      setMorphologyDiagnostics((prev) => {
+        if (prev.some((item) => item.level === diagnostic.level && item.message === diagnostic.message)) {
+          return prev;
+        }
+        diagnosticsIdRef.current += 1;
+        return [...prev, { ...diagnostic, id: diagnosticsIdRef.current }];
+      });
+    });
+    return unsubscribe;
+  }, [subscribeToMorphologyDiagnostics]);
+
+  const dismissMorphologyDiagnostic = useCallback((id: number) => {
+    setMorphologyDiagnostics((prev) => prev.filter((item) => item.id !== id));
+  }, []);
 
   const paragraphs = useMemo(() => {
     if (!sentenceList.length) return [] as Sentence[][];
@@ -618,7 +643,8 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   const canGoNext = pageIndex < totalPages - 1;
 
   return (
-    <div className="flex flex-col gap-4">
+    <>
+      <div className="flex flex-col gap-4">
       <header className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
         <div>
           <h1 className="text-2xl font-semibold">{document.title}</h1>
@@ -894,7 +920,50 @@ export function ReaderView({ documentId }: ReaderViewProps) {
           })()}
         </div>
       )}
-    </div>
+      </div>
+      {morphologyDiagnostics.length > 0 && (
+        <div className="fixed right-4 top-4 z-50 flex max-w-sm flex-col gap-3">
+          {morphologyDiagnostics.map((diagnostic) => {
+            const toneClasses =
+              diagnostic.level === 'error'
+                ? 'border-red-300 bg-red-50 text-red-900 dark:border-red-600/60 dark:bg-red-950/60 dark:text-red-100'
+                : diagnostic.level === 'warning'
+                ? 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-500/60 dark:bg-amber-950/50 dark:text-amber-100'
+                : 'border-blue-300 bg-blue-50 text-blue-900 dark:border-blue-500/60 dark:bg-blue-950/50 dark:text-blue-100';
+            return (
+              <div
+                key={diagnostic.id}
+                className={`relative overflow-hidden rounded-md border p-3 shadow-lg transition-all ${toneClasses}`}
+              >
+                <div className="flex items-start gap-2">
+                  <div className="flex-1 space-y-1 text-sm">
+                    <p className="font-medium">
+                      {diagnostic.message}
+                      {diagnostic.source ? ` (${diagnostic.source})` : ''}
+                    </p>
+                    {diagnostic.help && diagnostic.help.length > 0 && (
+                      <ul className="list-inside list-disc space-y-0.5 text-xs opacity-90">
+                        {diagnostic.help.map((hint, index) => (
+                          <li key={`${diagnostic.id}-hint-${index}`}>{hint}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="-m-1 rounded-full p-1 text-xs text-current transition-opacity hover:opacity-70"
+                    aria-label="Dismiss morphology warning"
+                    onClick={() => dismissMorphologyDiagnostic(diagnostic.id)}
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
   );
 }
 

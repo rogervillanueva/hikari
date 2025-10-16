@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { SudachiUnavailableError, tokenizeWithSudachi } from '@/lib/sudachi/server';
+import { tokenizeJapaneseServer } from '@/lib/morphology/server';
+import { SudachiUnavailableError } from '@/lib/sudachi/server';
 
 export const runtime = 'nodejs';
 
@@ -29,8 +30,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    const tokens = await tokenizeWithSudachi(trimmed);
-    return NextResponse.json({ tokens });
+    const { tokens, source, diagnostics } = await tokenizeJapaneseServer(trimmed);
+    return NextResponse.json({ tokens, source, diagnostics });
   } catch (error) {
     if (error instanceof SudachiUnavailableError) {
       return NextResponse.json({ error: error.message, help: error.help }, { status: 503 });
