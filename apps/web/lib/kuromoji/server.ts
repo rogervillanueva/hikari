@@ -60,7 +60,7 @@ async function loadTokenizer(): Promise<KuromojiTokenizerLike> {
       throw error;
     }
     throw new KuromojiUnavailableError('kuromoji module is not installed.', [
-      'Install it with `pnpm --filter web add kuromoji` inside the repo.',
+      'Install it with `pnpm --filter web add kuromoji @types/kuromoji@0.1.3` inside the repo.',
       'If you are using a custom tokenizer, set KUROMOJI_MODULE to its package name.',
     ], { cause: error });
   }

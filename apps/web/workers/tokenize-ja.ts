@@ -62,6 +62,10 @@ function emitMorphologyDiagnostic(diagnostic: MorphologyDiagnostic) {
 const MORPHOLOGY_ENDPOINT = process.env.NEXT_PUBLIC_MORPHOLOGY_ENDPOINT;
 const MORPHOLOGY_API_KEY = process.env.NEXT_PUBLIC_MORPHOLOGY_API_KEY;
 
+const REMOTE_FAILURE_BACKOFFS_MS = [5_000, 15_000, 60_000, 300_000];
+let remoteUnavailableUntil = 0;
+let consecutiveRemoteFailures = 0;
+
 export async function tokenizeJapanese({ text }: TokenizeRequest): Promise<TokenizeResponse> {
   const trimmed = text.trim();
   if (!trimmed.length) {
@@ -79,6 +83,9 @@ export async function tokenizeJapanese({ text }: TokenizeRequest): Promise<Token
 
 async function tryRemoteTokenizer(text: string): Promise<TokenizeResponseToken[] | null> {
   if (!MORPHOLOGY_ENDPOINT) {
+    return null;
+  }
+  if (remoteUnavailableUntil > Date.now()) {
     return null;
   }
   try {
@@ -99,7 +106,7 @@ async function tryRemoteTokenizer(text: string): Promise<TokenizeResponseToken[]
         // Ignore body parsing errors and fall back to a generic message.
       }
       const message = details?.error ?? `Remote tokenizer returned status ${response.status}.`;
-      emitMorphologyDiagnostic({ level: 'error', message, help: details?.help });
+      recordRemoteFailure(message, details?.help, { level: 'error', source: 'remote' });
       console.warn('[tokenize-ja] remote tokenizer returned', response.status);
       return null;
     }
@@ -115,18 +122,28 @@ async function tryRemoteTokenizer(text: string): Promise<TokenizeResponseToken[]
     }
 
     if (!payload?.tokens?.length) {
+      recordRemoteFailure(
+        'Remote tokenizer did not return any tokens. Falling back to heuristics.',
+        undefined,
+        {
+          source: payload?.source ?? 'remote',
+        },
+      );
       return null;
     }
 
     if (looksLikePerCharacterSegmentation(payload.tokens, text)) {
       console.warn('[tokenize-ja] remote tokenizer returned low-quality segmentation, falling back');
-      emitMorphologyDiagnostic({
-        level: 'warning',
-        message: 'Remote tokenizer returned low-quality segmentation. Falling back to heuristics.',
-        source: payload?.source,
-      });
+      recordRemoteFailure(
+        'Remote tokenizer returned low-quality segmentation. Falling back to heuristics.',
+        [...(payload?.diagnostics?.flatMap((diagnostic) => diagnostic.help ?? []) ?? [])],
+        { source: payload?.source ?? 'remote' },
+      );
       return null;
     }
+
+    consecutiveRemoteFailures = 0;
+    remoteUnavailableUntil = 0;
 
     return payload.tokens.map((token) => {
       const posList = Array.isArray(token.pos)
@@ -148,13 +165,34 @@ async function tryRemoteTokenizer(text: string): Promise<TokenizeResponseToken[]
     });
   } catch (error) {
     console.error('[tokenize-ja] remote tokenizer failed', error);
-    emitMorphologyDiagnostic({
-      level: 'error',
-      message: 'Failed to reach remote tokenizer. Falling back to heuristics.',
-      help: [error instanceof Error ? error.message : String(error)],
-    });
+    recordRemoteFailure(
+      'Failed to reach remote tokenizer. Falling back to heuristics.',
+      [error instanceof Error ? error.message : String(error)],
+      { level: 'error', source: 'remote' },
+    );
     return null;
   }
+}
+
+function recordRemoteFailure(
+  message: string,
+  help?: string[],
+  options?: { level?: MorphologyDiagnostic['level']; source?: string },
+) {
+  consecutiveRemoteFailures = Math.min(consecutiveRemoteFailures + 1, REMOTE_FAILURE_BACKOFFS_MS.length);
+  const backoffIndex = Math.min(consecutiveRemoteFailures - 1, REMOTE_FAILURE_BACKOFFS_MS.length - 1);
+  const delay = REMOTE_FAILURE_BACKOFFS_MS[backoffIndex] ?? REMOTE_FAILURE_BACKOFFS_MS[0];
+  remoteUnavailableUntil = Date.now() + delay;
+  const seconds = Math.max(1, Math.round(delay / 1000));
+  const helpMessages = [...(help ?? []), `Retrying remote tokenizer in ${seconds} seconds.`].filter(
+    (entry): entry is string => typeof entry === 'string' && entry.length > 0,
+  );
+  emitMorphologyDiagnostic({
+    level: options?.level ?? 'warning',
+    message,
+    help: helpMessages,
+    source: options?.source,
+  });
 }
 
 const JAPANESE_CHAR_REGEX = /[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}]/u;

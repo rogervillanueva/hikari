@@ -92,8 +92,8 @@ grammar metadata. To plug in production services:
     sudachi` (or vendor a compatible module and update
     `SUDACHI_MODULE_CANDIDATES`). If Sudachi is unavailable, the API route
     automatically falls back to the bundled Kuromoji tokenizer—install it with
-    `pnpm --filter web add kuromoji @types/kuromoji` so the fallback can spin up
-    successfully.
+    `pnpm --filter web add kuromoji @types/kuromoji@0.1.3` so the fallback can
+    spin up successfully.
    - Download the latest Sudachi Full dictionary and place the extracted
      `system_full.dic` under `apps/web/lib/sudachi/` (the directory is gitignored)
      or set `SUDACHI_DICTIONARY_PATH` to its location.
