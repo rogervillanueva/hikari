@@ -10,7 +10,7 @@ export interface TranslationProvider {
     sentences: string[],
     src: 'ja' | 'en',
     tgt: 'en' | 'ja',
-    opts?: { formality?: string }
+    opts?: { formality?: string; instructions?: string }
   ): Promise<string[]>;
   estimateCost(chars: number): TranslationEstimate | null;
 }

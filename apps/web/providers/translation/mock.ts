@@ -15,10 +15,11 @@ function estimate(chars: number): TranslationEstimate {
 export const mockTranslationProvider: TranslationProvider = {
   id: 'mock',
   label: 'Mock Translation',
-  translateSentences: async (sentences, src) => {
+  translateSentences: async (sentences, src, _tgt, opts) => {
     console.info('[translation:mock] translating', {
       sentences: sentences.length,
-      src
+      src,
+      instructions: opts?.instructions
     });
 
     if (src === 'en') {

@@ -5,11 +5,13 @@
     "paths": {
       "@/components/*": ["./components/*"],
       "@/lib/*": ["./lib/*"],
+      "@/config/*": ["./config/*"],
       "@/providers/*": ["./providers/*"],
       "@/store/*": ["./store/*"],
       "@/workers/*": ["./workers/*"],
       "@/fixtures/*": ["./fixtures/*"],
-      "@/scripts/*": ["./scripts/*"]
+      "@/scripts/*": ["./scripts/*"],
+      "@/utils/*": ["./utils/*"]
     }
   },
   "include": [

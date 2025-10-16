@@ -15,12 +15,14 @@ export interface CacheRecord {
   expiresAt?: number;
 }
 
+const TRANSLATION_DB_NAME = "hikari-translations";
+
 export class HikariDexie extends Dexie {
   sentences!: Table<SentenceRecord, string>;
   caches!: Table<CacheRecord, string>;
 
   constructor() {
-    super("hikari");
+    super(TRANSLATION_DB_NAME);
     this.version(1).stores({
       sentences: "&id,translation_en,translation_ja",
       caches: "&key,updatedAt",

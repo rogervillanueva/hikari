@@ -31,7 +31,8 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
   async createFromText(title, text, source) {
     const now = Date.now();
     const id = nanoid();
-    const sentences = sentenceSplitter(text);
+    const segmentedSentences = sentenceSplitter(text);
+    const flattenedSentences = segmentedSentences.map((entry) => entry.text);
     const doc: DocumentMeta = {
       id,
       title,
@@ -39,18 +40,20 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
       lang_source: 'ja',
       lang_target: 'en',
       size_chars: text.length,
-      size_tokens: sentences.join(' ').length,
+      size_tokens: flattenedSentences.join(' ').length,
       createdAt: now,
       updatedAt: now
     };
     await db.documents.put(doc);
     await Promise.all(
-      sentences.map((sentence, index) =>
+      segmentedSentences.map((sentence, index) =>
         db.sentences.put({
           id: nanoid(),
           documentId: id,
           index,
-          text_raw: sentence,
+          text_raw: sentence.text,
+          text_norm: sentence.text,
+          paragraphIndex: sentence.paragraphIndex,
           tokens: []
         })
       )

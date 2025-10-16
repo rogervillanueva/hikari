@@ -7,6 +7,7 @@ import React, {
   useState,
 } from "react";
 import { translationEnv } from "../config/env";
+import { readerConfig } from "../config/reader";
 import { getTranslationProvider, listTranslationProviders } from "../providers/translation";
 import {
   TranslationDirection,
@@ -132,6 +133,7 @@ export const TranslationSettingsProvider: React.FC<React.PropsWithChildren> = ({
           providerName,
           budgetCents,
           abortSignal,
+          instruction: readerConfig.translationInstruction,
         });
         setLastConsumedBudgetCents(consumedBudgetCents);
         return translations;
