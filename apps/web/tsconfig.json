@@ -3,15 +3,33 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
-      "@/components/*": ["./components/*"],
-      "@/lib/*": ["./lib/*"],
-      "@/config/*": ["./config/*"],
-      "@/providers/*": ["./providers/*"],
-      "@/store/*": ["./store/*"],
-      "@/workers/*": ["./workers/*"],
-      "@/fixtures/*": ["./fixtures/*"],
-      "@/scripts/*": ["./scripts/*"],
-      "@/utils/*": ["./utils/*"]
+      "@/components/*": [
+        "./components/*"
+      ],
+      "@/lib/*": [
+        "./lib/*"
+      ],
+      "@/config/*": [
+        "./config/*"
+      ],
+      "@/providers/*": [
+        "./providers/*"
+      ],
+      "@/store/*": [
+        "./store/*"
+      ],
+      "@/workers/*": [
+        "./workers/*"
+      ],
+      "@/fixtures/*": [
+        "./fixtures/*"
+      ],
+      "@/scripts/*": [
+        "./scripts/*"
+      ],
+      "@/utils/*": [
+        "./utils/*"
+      ]
     }
   },
   "include": [
@@ -20,7 +38,10 @@
     "**/*.tsx",
     "**/*.js",
     "**/*.cjs",
-    "**/*.mjs"
+    "**/*.mjs",
+    ".next/types/**/*.ts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules"
+  ]
 }
