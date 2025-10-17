@@ -39,11 +39,27 @@ class SmartCache {
   private documentCache: DocumentCache = {};
   private maxCacheSize = 10000; // Max entries per cache
   private maxAge = 7 * 24 * 60 * 60 * 1000; // 7 days
+  private cacheVersion = 2; // Increment this to force cache reset
   
   constructor() {
+    this.checkCacheVersion();
     this.loadFromStorage();
     // Cleanup old entries every hour
     setInterval(() => this.cleanup(), 60 * 60 * 1000);
+  }
+
+  // Check if we need to clear cache due to version changes
+  private checkCacheVersion(): void {
+    if (typeof window === 'undefined') return;
+    
+    const storedVersion = localStorage.getItem('hikari-cache-version');
+    const currentVersion = this.cacheVersion.toString();
+    
+    if (storedVersion !== currentVersion) {
+      console.log('🧹 Cache version mismatch - clearing old cache data');
+      this.clear();
+      localStorage.setItem('hikari-cache-version', currentVersion);
+    }
   }
 
   // Generate consistent hash for text
@@ -57,22 +73,25 @@ class SmartCache {
     return Math.abs(hash).toString(36);
   }
 
-  // Translation caching
-  getTranslation(text: string, direction: string): string | null {
-    const key = this.hash(`${text}-${direction}`);
+  // Translation caching with document context
+  getTranslation(text: string, direction: string, documentId?: string): string | null {
+    const key = this.hash(`${text}-${direction}-${documentId || 'global'}`);
     const entry = this.translationCache[key];
     
     if (entry && this.isValid(entry)) {
       entry.accessCount++;
       entry.lastAccessed = Date.now();
+      console.log(`💾 Cache HIT for "${text}" in document "${documentId}"`);
       return entry.data.translation;
     }
     
+    console.log(`❌ Cache MISS for "${text}" in document "${documentId}"`);
     return null;
   }
 
-  setTranslation(text: string, translation: string, direction: string): void {
-    const key = this.hash(`${text}-${direction}`);
+  setTranslation(text: string, translation: string, direction: string, documentId?: string): void {
+    const key = this.hash(`${text}-${direction}-${documentId || 'global'}`);
+    console.log(`💾 Caching translation for "${text}" in document "${documentId}": "${translation}"`);
     this.translationCache[key] = {
       data: {
         translation,

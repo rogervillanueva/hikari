@@ -314,7 +314,7 @@ export function TouchSelectableText({
         analyzeJapaneseText(selectedText),
         (async () => {
           // Check cache first 🚀
-          const cachedTranslation = smartCache.getTranslation(selectedText, direction);
+          const cachedTranslation = smartCache.getTranslation(selectedText, direction, documentId);
           if (cachedTranslation) {
             console.log('💾 Using cached translation');
             return cachedTranslation;
@@ -337,7 +337,7 @@ export function TouchSelectableText({
           
           // Cache the result for future use
           if (translation !== 'Translation not available') {
-            smartCache.setTranslation(selectedText, translation, direction);
+            smartCache.setTranslation(selectedText, translation, direction, documentId);
           }
 
           return translation;

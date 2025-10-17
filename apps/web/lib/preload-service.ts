@@ -218,7 +218,7 @@ class PreloadService {
   ): Promise<void> {
     // Filter sentences that aren't already cached
     const uncachedSentences = page.sentences.filter(sentence => 
-      !smartCache.getTranslation(sentence, direction)
+      !smartCache.getTranslation(sentence, direction, page.documentId)
     );
 
     if (uncachedSentences.length === 0) {
@@ -251,13 +251,13 @@ class PreloadService {
           const sentenceIndex = parseInt(id.split('-').pop() || '0');
           const originalText = batch[sentenceIndex];
           if (originalText && translation) {
-            smartCache.setTranslation(originalText, translation, direction);
+            smartCache.setTranslation(originalText, translation, direction, page.documentId);
           }
         });
 
         // Cache at document level too
         const allTranslations = batch.map(text => 
-          smartCache.getTranslation(text, direction) || ''
+          smartCache.getTranslation(text, direction, page.documentId) || ''
         );
         smartCache.setDocumentTranslations(page.documentId, page.pageIndex, allTranslations);
         
@@ -320,7 +320,7 @@ class PreloadService {
     // Preload translations for most common words
     const commonWords = vocabulary.slice(0, 100); // Top 100 words
     const uncachedWords = commonWords.filter(word => 
-      !smartCache.getTranslation(word, direction)
+      !smartCache.getTranslation(word, direction, 'vocabulary')
     );
 
     if (uncachedWords.length > 0) {
@@ -349,7 +349,7 @@ class PreloadService {
             const wordIndex = parseInt(id.split('-').pop() || '0');
             const originalWord = batch[wordIndex];
             if (originalWord && translation) {
-              smartCache.setTranslation(originalWord, translation, direction);
+              smartCache.setTranslation(originalWord, translation, direction, 'vocabulary');
             }
           });
 
