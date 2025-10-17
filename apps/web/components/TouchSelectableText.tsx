@@ -3,6 +3,8 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { ACTIVE_TRANSLATION_PROVIDER } from '@/lib/config';
 import { translateSentences } from '@/utils/translateSentences';
+import { analyzeJapaneseText, generateFuriganaSegments, type DetailedAnalysis } from '../lib/morphology';
+import { FuriganaText } from '@/components/FuriganaText';
 import type { TranslationDirection } from '@/providers/translation/base';
 
 interface TouchSelectableTextProps {
@@ -21,6 +23,7 @@ interface SelectionState {
 interface TranslationPopup {
   text: string;
   translation: string;
+  analysis: DetailedAnalysis;
   x: number;
   y: number;
 }
@@ -38,6 +41,7 @@ export function TouchSelectableText({
   });
   const [popup, setPopup] = useState<TranslationPopup | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const charactersRef = useRef<HTMLSpanElement[]>([]);
   const longPressTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -145,34 +149,59 @@ export function TouchSelectableText({
     const popupX = touch?.clientX ?? 0;
     const popupY = touch?.clientY ?? 0;
 
-    // Translate the selected text
+    // Analyze and translate the selected text
     setIsTranslating(true);
     try {
-      // Create a unique ID for this selection to avoid caching conflicts
-      const selectionId = `selection-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      
-      const { translations } = await translateSentences({
-        sentences: [{ id: selectionId, text: selectedText }],
-        direction,
-        documentId,
-        batchSize: 1,
-        maxCharactersPerBatch: selectedText.length,
-        instruction: 'Translate this text selection naturally and concisely.',
-      });
+      // Run morphological analysis and translation in parallel
+      const [analysis, translationResult] = await Promise.all([
+        analyzeJapaneseText(selectedText),
+        (async () => {
+          // Create a unique ID for this selection to avoid caching conflicts
+          const selectionId = `selection-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+          
+          const { translations } = await translateSentences({
+            sentences: [{ id: selectionId, text: selectedText }],
+            direction,
+            documentId,
+            batchSize: 1,
+            maxCharactersPerBatch: selectedText.length,
+            instruction: 'Translate this text selection naturally and concisely.',
+          });
 
-      const translation = translations[selectionId] || 'Translation not available';
+          return translations[selectionId] || 'Translation not available';
+        })()
+      ]);
       
       setPopup({
         text: selectedText,
-        translation,
+        translation: translationResult,
+        analysis,
         x: popupX,
         y: popupY,
       });
     } catch (error) {
-      console.error('Translation failed:', error);
+      console.error('Translation/Analysis failed:', error);
+      
+      // Fallback analysis for error case
+      const fallbackAnalysis: DetailedAnalysis = {
+        original: [{
+          surface: selectedText,
+          baseForm: selectedText,
+          partOfSpeech: 'Unknown',
+          features: [],
+        }],
+        wordType: 'Unknown',
+        furiganaSegments: selectedText.split('').map(char => ({
+          text: char,
+          reading: undefined,
+          isKanji: /[一-龯]/.test(char),
+        })),
+      };
+      
       setPopup({
         text: selectedText,
         translation: 'Translation failed',
+        analysis: fallbackAnalysis,
         x: popupX,
         y: popupY,
       });
@@ -187,6 +216,40 @@ export function TouchSelectableText({
   const closePopup = useCallback(() => {
     setPopup(null);
   }, []);
+
+  // Handle TTS audio playback
+  const playAudio = useCallback(async (text: string) => {
+    if (isPlayingAudio) return;
+    
+    setIsPlayingAudio(true);
+    try {
+      const response = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          text: text.trim(), 
+          lang: 'ja'
+        }),
+        cache: 'no-store'
+      });
+
+      if (!response.ok) {
+        throw new Error(`TTS request failed: ${response.status}`);
+      }
+
+      const { url } = await response.json();
+      
+      // Create and play audio
+      const audio = new Audio(url);
+      audio.onended = () => setIsPlayingAudio(false);
+      audio.onerror = () => setIsPlayingAudio(false);
+      
+      await audio.play();
+    } catch (error) {
+      console.error('TTS playback failed:', error);
+      setIsPlayingAudio(false);
+    }
+  }, [isPlayingAudio]);
 
   // Handle mouse events for desktop testing
   const handleMouseDown = useCallback((e: React.MouseEvent, charIndex: number) => {
@@ -227,31 +290,56 @@ export function TouchSelectableText({
 
     setIsTranslating(true);
     try {
-      // Create a unique ID for this selection to avoid caching conflicts
-      const selectionId = `selection-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      
-      const { translations } = await translateSentences({
-        sentences: [{ id: selectionId, text: selectedText }],
-        direction,
-        documentId,
-        batchSize: 1,
-        maxCharactersPerBatch: selectedText.length,
-        instruction: 'Translate this text selection naturally and concisely.',
-      });
+      // Run morphological analysis and translation in parallel
+      const [analysis, translationResult] = await Promise.all([
+        analyzeJapaneseText(selectedText),
+        (async () => {
+          // Create a unique ID for this selection to avoid caching conflicts
+          const selectionId = `selection-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+          
+          const { translations } = await translateSentences({
+            sentences: [{ id: selectionId, text: selectedText }],
+            direction,
+            documentId,
+            batchSize: 1,
+            maxCharactersPerBatch: selectedText.length,
+            instruction: 'Translate this text selection naturally and concisely.',
+          });
 
-      const translation = translations[selectionId] || 'Translation not available';
+          return translations[selectionId] || 'Translation not available';
+        })()
+      ]);
       
       setPopup({
         text: selectedText,
-        translation,
+        translation: translationResult,
+        analysis,
         x: e.clientX,
         y: e.clientY,
       });
     } catch (error) {
-      console.error('Translation failed:', error);
+      console.error('Translation/Analysis failed:', error);
+      
+      // Fallback analysis for error case
+      const fallbackAnalysis: DetailedAnalysis = {
+        original: [{
+          surface: selectedText,
+          baseForm: selectedText,
+          partOfSpeech: 'Unknown',
+          features: [],
+        }],
+        wordType: 'Unknown',
+        furiganaSegments: selectedText.split('').map(char => ({
+          text: char,
+          reading: undefined,
+          isKanji: /[一-龯]/.test(char),
+        })),
+      };
+      
       setPopup({
         text: selectedText,
         translation: 'Translation failed',
+        analysis: fallbackAnalysis,
         x: e.clientX,
         y: e.clientY,
       });
@@ -301,25 +389,90 @@ export function TouchSelectableText({
         ))}
       </div>
 
-      {/* Translation Popup */}
+      {/* Detailed Translation Popup */}
       {popup && (
-        <div 
+        <div
           className="fixed z-50 pointer-events-none"
           style={{
-            left: `${Math.min(popup.x, (typeof window !== 'undefined' ? window.innerWidth : 800) - 320)}px`,
-            top: `${Math.max(popup.y - 100, 10)}px`,
+            left: `${Math.min(popup.x, (typeof window !== 'undefined' ? window.innerWidth : 800) - 400)}px`,
+            top: `${Math.max(popup.y - 150, 10)}px`,
           }}
         >
-          <div className="pointer-events-auto bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl p-4 max-w-xs backdrop-blur-sm bg-white/95 dark:bg-neutral-900/95">
-            <div className="text-lg font-medium text-neutral-900 dark:text-neutral-100 mb-2 leading-tight">
-              "{popup.text}"
+          <div className="pointer-events-auto bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl p-5 max-w-sm backdrop-blur-sm bg-white/95 dark:bg-neutral-900/95">            {/* Section 1: Base Form */}
+            {popup.analysis.baseWord && (
+              <div className="mb-4 pb-4 border-b border-neutral-200 dark:border-neutral-700">
+                <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-2 uppercase tracking-wide">
+                  Base Form
+                </div>
+                                <div className="text-xl font-medium text-neutral-900 dark:text-neutral-100 mb-1">
+                  <FuriganaText 
+                    segments={generateFuriganaSegments(popup.analysis.baseWord.surface, popup.analysis.baseWord.reading)}
+                    className="pb-2"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Section 2: Current Form */}
+            <div className="mb-4 pb-4 border-b border-neutral-200 dark:border-neutral-700">
+              <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-2 uppercase tracking-wide">
+                Selected Form
+              </div>
+              <div className="text-xl font-medium text-neutral-900 dark:text-neutral-100 mb-2">
+                <FuriganaText 
+                  segments={popup.analysis.furiganaSegments}
+                  className="pb-2"
+                />
+              </div>
+              {popup.analysis.conjugationInfo && (
+                <div className="text-sm text-blue-600 dark:text-blue-400 italic">
+                  {popup.analysis.conjugationInfo}
+                </div>
+              )}
             </div>
-            <div className="text-sm text-neutral-600 dark:text-neutral-400 mb-4 leading-relaxed">
-              {popup.translation}
+
+            {/* Audio Playback Button */}
+            <div className="mb-4 pb-4 border-b border-neutral-200 dark:border-neutral-700">
+              <button
+                onClick={() => playAudio(popup.text)}
+                disabled={isPlayingAudio}
+                className="flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30 rounded-lg transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Play pronunciation"
+              >
+                {isPlayingAudio ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                    <span className="text-sm text-blue-700 dark:text-blue-300 font-medium">Playing...</span>
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4 text-blue-600 dark:text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.617.824L4.168 13H2a1 1 0 01-1-1V8a1 1 0 011-1h2.168l4.215-3.824zm2.617 2.062a1 1 0 011 1v7.724a1 1 0 01-2 0V6.138z" clipRule="evenodd" />
+                      <path fillRule="evenodd" d="M12.293 7.293a1 1 0 011.414 0A6.5 6.5 0 0116 12a6.5 6.5 0 01-2.293 4.707 1 1 0 01-1.414-1.414A4.5 4.5 0 0014 12a4.5 4.5 0 00-1.707-3.293 1 1 0 010-1.414z" clipRule="evenodd" />
+                    </svg>
+                    <span className="text-sm text-blue-700 dark:text-blue-300 font-medium">Play Audio</span>
+                  </>
+                )}
+              </button>
             </div>
+
+            {/* Section 3: Translation & Word Type */}
+            <div className="mb-4">
+              <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-2 uppercase tracking-wide">
+                Translation & Type
+              </div>
+              <div className="text-base text-neutral-700 dark:text-neutral-300 mb-2 leading-relaxed">
+                {popup.translation}
+              </div>
+              <div className="inline-block px-2 py-1 bg-neutral-100 dark:bg-neutral-800 rounded text-xs font-medium text-neutral-600 dark:text-neutral-400">
+                {popup.analysis.wordType}
+              </div>
+            </div>
+
+            {/* Close Button */}
             <button
               onClick={closePopup}
-              className="text-xs bg-primary text-white px-4 py-2 rounded-md hover:bg-primary/90 active:scale-95 transition-all duration-150 font-medium shadow-sm"
+              className="w-full text-sm bg-primary text-white px-4 py-2 rounded-md hover:bg-primary/90 active:scale-95 transition-all duration-150 font-medium shadow-sm"
             >
               Close
             </button>
