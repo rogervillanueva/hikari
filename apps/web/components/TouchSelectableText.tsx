@@ -5,6 +5,7 @@ import { ACTIVE_TRANSLATION_PROVIDER } from '@/lib/config';
 import { translateSentences } from '@/utils/translateSentences';
 import { analyzeJapaneseText, generateFuriganaSegments, type DetailedAnalysis } from '../lib/morphology';
 import { FuriganaText } from '@/components/FuriganaText';
+import { smartCache } from '@/lib/smart-cache';
 import type { TranslationDirection } from '@/providers/translation/base';
 
 interface TouchSelectableTextProps {
@@ -217,17 +218,32 @@ export function TouchSelectableText({
     setPopup(null);
   }, []);
 
-  // Handle TTS audio playback
+  // Handle TTS audio playback with smart caching
   const playAudio = useCallback(async (text: string) => {
     if (isPlayingAudio) return;
     
     setIsPlayingAudio(true);
     try {
+      const trimmedText = text.trim();
+      
+      // Check cache first 🚀
+      const cachedTTS = smartCache.getTTS(trimmedText, 'ja');
+      if (cachedTTS) {
+        console.log('🎵 Playing cached TTS');
+        const audio = new Audio(cachedTTS.audioUrl);
+        audio.onended = () => setIsPlayingAudio(false);
+        audio.onerror = () => setIsPlayingAudio(false);
+        await audio.play();
+        return;
+      }
+
+      // Cache miss - generate new TTS
+      console.log('🔄 Generating new TTS (cache miss)');
       const response = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          text: text.trim(), 
+          text: trimmedText, 
           lang: 'ja'
         }),
         cache: 'no-store'
@@ -237,7 +253,10 @@ export function TouchSelectableText({
         throw new Error(`TTS request failed: ${response.status}`);
       }
 
-      const { url } = await response.json();
+      const { result, url } = await response.json();
+      
+      // Cache the result for future use
+      smartCache.setTTS(trimmedText, url, result.audioId, result.durationMs, 'ja');
       
       // Create and play audio
       const audio = new Audio(url);
@@ -290,11 +309,19 @@ export function TouchSelectableText({
 
     setIsTranslating(true);
     try {
-      // Run morphological analysis and translation in parallel
+      // Run morphological analysis and smart cached translation in parallel
       const [analysis, translationResult] = await Promise.all([
         analyzeJapaneseText(selectedText),
         (async () => {
-          // Create a unique ID for this selection to avoid caching conflicts
+          // Check cache first 🚀
+          const cachedTranslation = smartCache.getTranslation(selectedText, direction);
+          if (cachedTranslation) {
+            console.log('💾 Using cached translation');
+            return cachedTranslation;
+          }
+
+          // Cache miss - get fresh translation
+          console.log('🔄 Getting fresh translation (cache miss)');
           const selectionId = `selection-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
           
           const { translations } = await translateSentences({
@@ -306,7 +333,14 @@ export function TouchSelectableText({
             instruction: 'Translate this text selection naturally and concisely.',
           });
 
-          return translations[selectionId] || 'Translation not available';
+          const translation = translations[selectionId] || 'Translation not available';
+          
+          // Cache the result for future use
+          if (translation !== 'Translation not available') {
+            smartCache.setTranslation(selectedText, translation, direction);
+          }
+
+          return translation;
         })()
       ]);
       

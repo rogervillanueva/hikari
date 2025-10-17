@@ -11,8 +11,10 @@ import { readerConfig } from '@/config/reader';
 import { useDocumentsStore } from '@/store/documents';
 import { getTtsProvider } from '@/providers/tts';
 import { TouchSelectableText } from '@/components/TouchSelectableText';
+import { usePreload } from '@/hooks/usePreload';
 import type { Sentence } from '@/lib/types';
 import type { TranslationDirection } from '@/providers/translation/base';
+import type { DocumentPage } from '@/lib/preload-service';
 import { translateSentences } from '@/utils/translateSentences';
 
 interface ReaderViewProps {
@@ -233,6 +235,29 @@ export function ReaderView({ documentId }: ReaderViewProps) {
 
   const sourceLanguage = document?.lang_source ?? 'ja';
   const direction: TranslationDirection = sourceLanguage === 'en' ? 'en-ja' : 'ja-en';
+
+  // Transform pages for preload service
+  const documentPages: DocumentPage[] = useMemo(() => 
+    pages.map((page, index) => {
+      const sentences = page.flat().map(s => s.text_raw);
+      const content = sentences.join(' ');
+      return {
+        documentId: documentId,
+        pageIndex: index,
+        content,
+        sentences,
+      };
+    }), [pages, documentId]
+  );
+
+  // Initialize smart preloading 🚀
+  usePreload({
+    documentId,
+    currentPageIndex: pageIndex,
+    pages: documentPages,
+    direction,
+    enabled: true,
+  });
 
   const ensureChunkTranslations = useCallback(
     async (targetChunk: number) => {
