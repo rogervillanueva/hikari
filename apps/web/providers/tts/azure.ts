@@ -1,5 +1,5 @@
 import { createId } from '@/lib/id';
-import type { TtsProvider, TtsResult } from './types';
+import type { TtsProvider, TtsResult, TtsMark } from './types';
 
 const DEFAULT_SAMPLE_RATE = 16000;
 const PCM_HEADER_BYTES = 44;
@@ -80,6 +80,98 @@ function registerUsage(chars: number) {
   globalAzure.__azureTtsUsage = tracker;
 }
 
+function estimateMarkTimings(expectedMarks: string[], totalDurationMs: number, text: string): TtsMark[] {
+  const marks: TtsMark[] = [];
+  
+  // Add basic start mark
+  marks.push({ offsetMs: 0, tag: 'start' });
+  
+  console.log('[Azure TTS] Estimating timing for', expectedMarks.length, 'marks in', totalDurationMs, 'ms');
+  
+  // For sentence marks, estimate timing based on position in text and speech patterns
+  const sentenceMarks = expectedMarks.filter(mark => mark.includes('sentence_'));
+  
+  if (sentenceMarks.length > 0) {
+    // Extract text content by finding text between markers
+    const textWithoutMarks = text.replace(/<[^>]+>/g, '');
+    const totalChars = textWithoutMarks.length;
+    
+    // Account for breaks in the total duration
+    const breakMatches = text.match(/<break[^>]*time="(\d+)ms"[^>]*>/g);
+    const totalBreakTime = breakMatches ? breakMatches.reduce((sum, match) => {
+      const timeMatch = match.match(/time="(\d+)ms"/);
+      return sum + (timeMatch ? parseInt(timeMatch[1]) : 0);
+    }, 0) : 0;
+    
+    // Available time for actual speech (excluding breaks)
+    const speechDurationMs = Math.max(500, totalDurationMs - totalBreakTime);
+    
+    console.log('[Azure TTS] Speech timing analysis:', {
+      totalDurationMs,
+      totalBreakTime,
+      speechDurationMs,
+      totalChars,
+      msPerChar: speechDurationMs / totalChars
+    });
+    
+    // Find positions of sentence markers in the original text
+    let currentTextPos = 0;
+    let currentTimeMs = 0;
+    
+    for (const mark of sentenceMarks) {
+      // Find the mark in the original text
+      const markPattern = new RegExp(`<mark name="${mark.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*>`);
+      const textToSearch = text.slice(currentTextPos);
+      const match = textToSearch.match(markPattern);
+      
+      if (match && match.index !== undefined) {
+        const markPosInText = currentTextPos + match.index;
+        
+        // Count actual text characters (excluding tags) up to this mark
+        const textBeforeMark = text.slice(0, markPosInText);
+        const charsBeforeMark = textBeforeMark.replace(/<[^>]+>/g, '').length;
+        
+        // Count breaks before this mark
+        const breaksBeforeMark = (textBeforeMark.match(/<break[^>]*time="(\d+)ms"[^>]*>/g) || [])
+          .reduce((sum, breakMatch) => {
+            const timeMatch = breakMatch.match(/time="(\d+)ms"/);
+            return sum + (timeMatch ? parseInt(timeMatch[1]) : 0);
+          }, 0);
+        
+        // Calculate time: speech time based on character ratio + break time
+        const speechProgressRatio = totalChars > 0 ? charsBeforeMark / totalChars : 0;
+        const speechTimeMs = speechDurationMs * speechProgressRatio;
+        const estimatedTimeMs = Math.round(speechTimeMs + breaksBeforeMark);
+        
+        console.log('[Azure TTS] Mark timing:', {
+          mark,
+          charsBeforeMark,
+          totalChars,
+          speechProgressRatio,
+          speechTimeMs,
+          breaksBeforeMark,
+          estimatedTimeMs
+        });
+        
+        marks.push({
+          offsetMs: Math.max(currentTimeMs, estimatedTimeMs),
+          tag: mark
+        });
+        
+        currentTextPos = markPosInText + match[0].length;
+        currentTimeMs = Math.max(currentTimeMs, estimatedTimeMs);
+      }
+    }
+  }
+  
+  // Add basic end mark
+  marks.push({ offsetMs: totalDurationMs, tag: 'end' });
+  
+  console.log('[Azure TTS] Generated timing marks:', marks.map(m => ({ tag: m.tag, time: m.offsetMs })));
+  
+  return marks;
+}
+
 async function speakSentenceServer(
   text: string,
   lang: 'ja' | 'en',
@@ -99,9 +191,26 @@ async function speakSentenceServer(
 
   registerUsage(text.length);
 
-  const ssml = `<?xml version="1.0" encoding="utf-8"?>\n<speak version="1.0" xml:lang="${locale}"><voice name="${voice}">${escapeSsml(
-    text
-  )}</voice></speak>`;
+  // Handle SSML with marks - don't escape if already contains SSML
+  let ssml: string;
+  let expectedMarks: string[] = [];
+  
+  if (text.includes('<mark') || text.includes('<break')) {
+    // Text already contains SSML marks, use as-is
+    ssml = `<?xml version="1.0" encoding="utf-8"?>\n<speak version="1.0" xml:lang="${locale}"><voice name="${voice}">${text}</voice></speak>`;
+    
+    // Extract mark names for timing tracking
+    const markMatches = text.match(/<mark name="([^"]+)"/g);
+    if (markMatches) {
+      expectedMarks = markMatches.map(match => {
+        const nameMatch = match.match(/name="([^"]+)"/);
+        return nameMatch ? nameMatch[1] : '';
+      }).filter(Boolean);
+    }
+  } else {
+    // Plain text, escape it
+    ssml = `<?xml version="1.0" encoding="utf-8"?>\n<speak version="1.0" xml:lang="${locale}"><voice name="${voice}">${escapeSsml(text)}</voice></speak>`;
+  }
 
   const response = await fetch(endpoint, {
     method: 'POST',
@@ -130,16 +239,23 @@ async function speakSentenceServer(
   const pcmBytes = Math.max(0, buffer.byteLength - PCM_HEADER_BYTES);
   const durationMs = Math.max(500, Math.round((pcmBytes / (DEFAULT_SAMPLE_RATE * 2)) * 1000));
 
-  const marks: TtsResult['marks'] = [
-    { offsetMs: 0, tag: 'start' },
-    { offsetMs: durationMs, tag: 'end' }
-  ];
+  // If we have expected marks but no timing info from Azure, estimate timing
+  let marks: TtsResult['marks'];
+  if (expectedMarks.length > 0) {
+    marks = estimateMarkTimings(expectedMarks, durationMs, text);
+  } else {
+    marks = [
+      { offsetMs: 0, tag: 'start' },
+      { offsetMs: durationMs, tag: 'end' }
+    ];
+  }
 
   console.info('[tts:azure] generated audio', {
     voice,
     locale,
     chars: text.length,
-    durationMs
+    durationMs,
+    marksCount: marks?.length || 0
   });
 
   return {

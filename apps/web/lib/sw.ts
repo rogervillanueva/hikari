@@ -1,16 +1,19 @@
 /* eslint-disable no-restricted-globals */
 
-self.addEventListener('install', (event) => {
+// TypeScript knows this is a service worker context
+const sw = self as unknown as ServiceWorkerGlobalScope;
+
+sw.addEventListener('install', (event: ExtendableEvent) => {
   console.info('[sw] installing');
-  event.waitUntil(self.skipWaiting());
+  event.waitUntil(sw.skipWaiting());
 });
 
-self.addEventListener('activate', (event) => {
+sw.addEventListener('activate', (event: ExtendableEvent) => {
   console.info('[sw] activating');
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(sw.clients.claim());
 });
 
-self.addEventListener('fetch', (event) => {
+sw.addEventListener('fetch', (event: FetchEvent) => {
   const request = event.request;
   if (request.method !== 'GET') return;
   if (!request.url.startsWith(self.location.origin)) return;

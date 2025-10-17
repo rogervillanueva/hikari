@@ -12,6 +12,9 @@ import { useDocumentsStore } from '@/store/documents';
 import { getTtsProvider } from '@/providers/tts';
 import { TouchSelectableText } from '@/components/TouchSelectableText';
 import { usePreload } from '@/hooks/usePreload';
+import { PageAudioPlayer, pageAudioService, type PageAudioPlayerRef } from '@/components/PageAudioPlayer';
+import { logAudioDebug } from '@/lib/audio-debug';
+import { logReaderEvent } from '@/lib/reader-debug';
 import type { Sentence } from '@/lib/types';
 import type { TranslationDirection } from '@/providers/translation/base';
 import type { DocumentPage } from '@/lib/preload-service';
@@ -22,12 +25,17 @@ interface ReaderViewProps {
 }
 
 export function ReaderView({ documentId }: ReaderViewProps) {
+  void logReaderEvent('ReaderView', 'component_init', { documentId });
+  
   const router = useRouter();
   const documents = useDocumentsStore((state) => state.documents);
   const sentencesByDoc = useDocumentsStore((state) => state.sentences);
   const loadDocuments = useDocumentsStore((state) => state.loadDocuments);
+  const loading = useDocumentsStore((state) => state.loading);
   const [activeSentence, setActiveSentence] = useState<number | null>(null);
+  const [currentPlayingSentence, setCurrentPlayingSentence] = useState<number | null>(null);
   const playingRef = useRef(false);
+  const pageAudioPlayerRef = useRef<PageAudioPlayerRef>(null);
   const [sentenceTranslations, setSentenceTranslations] = useState<Record<number, string>>({});
   const [openSentenceTranslations, setOpenSentenceTranslations] = useState<Record<number, boolean>>({});
   const [chunkTranslations, setChunkTranslations] = useState<Record<number, Record<string, string>>>({});
@@ -36,26 +44,57 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const document = useMemo(
-    () => documents.find((doc) => doc.id === documentId),
+    () => {
+      const doc = documents.find((doc) => doc.id === documentId);
+      void logReaderEvent('ReaderView', 'document_lookup', { 
+        documentId, 
+        found: !!doc, 
+        title: doc?.title,
+        totalDocuments: documents.length 
+      });
+      return doc;
+    },
     [documents, documentId]
   );
+  
   const sentenceList = sentencesByDoc[documentId] ?? [];
+  
+  void logReaderEvent('ReaderView', 'sentence_list_computed', {
+    documentId,
+    sentenceCount: sentenceList.length,
+    sentenceIndexes: sentenceList.slice(0, 5).map(s => s.index) // First 5 for debugging
+  });
   const sentencesPerPage = readerConfig.sentencesPerPage;
   const translationInstruction = readerConfig.translationInstruction;
   const chunkCharacterLimit = readerConfig.translationChunkCharacterLimit;
   const chunkPrefetchThreshold = readerConfig.translationChunkPrefetchThreshold;
 
   useEffect(() => {
+    void logReaderEvent('ReaderView', 'load_documents_called', {});
     void loadDocuments();
   }, [loadDocuments]);
 
-  useEffect(() => {
-    if (!document && documents.length) {
-      router.replace('/documents');
-    }
-  }, [document, documents.length, router]);
+
 
   useEffect(() => {
+    void logReaderEvent('ReaderView', 'document_check', {
+      hasDocument: !!document,
+      documentsLength: documents.length,
+      documentId
+    });
+    
+    if (!document && documents.length) {
+      void logReaderEvent('ReaderView', 'redirecting_to_documents', { reason: 'document_not_found' });
+      router.replace('/documents');
+    }
+  }, [document, documents.length, router, documentId]);
+
+  useEffect(() => {
+    void logReaderEvent('ReaderView', 'document_id_changed', {
+      newDocumentId: documentId,
+      resettingState: true
+    });
+    
     setPageIndex(0);
     setSentenceTranslations({});
     setOpenSentenceTranslations({});
@@ -131,11 +170,26 @@ export function ReaderView({ documentId }: ReaderViewProps) {
 
     pushCurrentPage();
 
+    void logReaderEvent('ReaderView', 'pages_computed', {
+      paragraphCount: paragraphs.length,
+      pageCount: result.length,
+      sentencesPerPage,
+      currentPageIndex: pageIndex
+    });
+
     return result.length ? result : [paragraphs];
-  }, [paragraphs, sentencesPerPage]);
+  }, [paragraphs, sentencesPerPage, pageIndex]);
 
   const totalPages = pages.length;
   const currentPage = pages[pageIndex] ?? [];
+  
+  void logReaderEvent('ReaderView', 'current_page_computed', {
+    pageIndex,
+    totalPages,
+    currentPageParagraphs: currentPage.length,
+    currentPageSentences: currentPage.flat().length,
+    firstSentenceIndexes: currentPage.flat().slice(0, 3).map(s => s.index)
+  });
 
   type TranslationChunk = {
     index: number;
@@ -249,6 +303,16 @@ export function ReaderView({ documentId }: ReaderViewProps) {
       };
     }), [pages, documentId]
   );
+
+  // Get sentences for current page
+  const currentPageSentences = pages[pageIndex]?.flat() || [];
+  
+  void logReaderEvent('ReaderView', 'current_page_sentences_computed', {
+    pageIndex,
+    sentenceCount: currentPageSentences.length,
+    sentenceIndexes: currentPageSentences.map(s => s.index),
+    sentenceTexts: currentPageSentences.slice(0, 2).map(s => s.text_raw.substring(0, 50)) // First 50 chars of first 2 sentences
+  });
 
   // Initialize smart preloading 🚀
   usePreload({
@@ -467,24 +531,68 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     [getAudioElement]
   );
 
-  const handleMasterPlay = useCallback(async () => {
-    if (playingRef.current) {
-      playingRef.current = false;
-      const audio = audioRef.current;
-      if (audio) {
-        audio.pause();
+  const handleSentencePlayPause = useCallback(async (sentence: Sentence) => {
+    void logReaderEvent('ReaderView', 'sentence_button_clicked', {
+      sentenceIndex: sentence.index,
+      sentenceText: sentence.text_raw.substring(0, 100),
+      currentPlayingSentence,
+      hasPageAudioPlayerRef: !!pageAudioPlayerRef.current,
+      pageAudioPlayerIsPlaying: pageAudioPlayerRef.current?.isPlaying() || false
+    });
+    
+    void logAudioDebug('sentence_button_clicked', {
+      sentenceIndex: sentence.index,
+      currentPlayingSentence,
+      hasPageAudioPlayerRef: !!pageAudioPlayerRef.current
+    });
+    
+    try {
+      if (pageAudioPlayerRef.current) {
+        // If this sentence is currently playing, pause the audio
+        if (currentPlayingSentence === sentence.index && pageAudioPlayerRef.current.isPlaying()) {
+          void logReaderEvent('ReaderView', 'pausing_current_sentence', { sentenceIndex: sentence.index });
+          void logAudioDebug('pausing_current_sentence', { sentenceIndex: sentence.index });
+          pageAudioPlayerRef.current.pause();
+        } else {
+          void logReaderEvent('ReaderView', 'jumping_to_sentence', { 
+            sentenceIndex: sentence.index,
+            fromSentence: currentPlayingSentence 
+          });
+          void logAudioDebug('jumping_to_sentence', { sentenceIndex: sentence.index });
+          // Jump to this sentence and start playing
+          await pageAudioPlayerRef.current.jumpToSentence(sentence.index);
+        }
+        setActiveSentence(sentence.index);
+      } else {
+        void logReaderEvent('ReaderView', 'fallback_sentence_play', { 
+          sentenceIndex: sentence.index,
+          reason: 'no_page_audio_player_ref'
+        });
+        void logAudioDebug('fallback_sentence_play', { sentenceIndex: sentence.index });
+        // Fallback to individual sentence play only if page audio player unavailable
+        await playSentence(sentence.index, sentence);
       }
-      return;
+    } catch (error) {
+      void logReaderEvent('ReaderView', 'sentence_play_error', { 
+        sentenceIndex: sentence.index, 
+        error: error instanceof Error ? error.message : String(error) 
+      });
+      void logAudioDebug('sentence_play_error', { 
+        sentenceIndex: sentence.index, 
+        error: error instanceof Error ? error.message : String(error) 
+      });
+      console.error('Failed to play/pause sentence:', error);
+      // Fallback to individual sentence play
+      await playSentence(sentence.index, sentence);
     }
-    playingRef.current = true;
-    for (let i = activeSentence ?? 0; i < sentenceList.length; i += 1) {
-      if (!playingRef.current) break;
-      const success = await playSentence(i, sentenceList[i]);
-    }
-    playingRef.current = false;
-  }, [activeSentence, sentenceList, playSentence]);
+  }, [playSentence, currentPlayingSentence]);
 
   if (!document) {
+    void logReaderEvent('ReaderView', 'document_not_found', { 
+      documentId, 
+      documentsCount: documents.length,
+      loading 
+    });
     return <p className="p-6 text-sm text-neutral-500">Loading document…</p>;
   }
 
@@ -495,29 +603,45 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   const canGoPrev = pageIndex > 0;
   const canGoNext = pageIndex < totalPages - 1;
 
+  void logReaderEvent('ReaderView', 'rendering', {
+    documentId,
+    documentTitle: document.title,
+    pageIndex,
+    totalPages,
+    currentPageSentenceCount: currentPageSentences.length,
+    canGoPrev,
+    canGoNext,
+    isCurrentPageLoading,
+    activeSentence,
+    currentPlayingSentence
+  });
+
   return (
     <div className="flex flex-col gap-4">
-      <header className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
-        <div>
-          <h1 className="text-2xl font-semibold">{document.title}</h1>
-          <p className="text-xs text-neutral-500">{sentenceList.length} sentences</p>
+      <header className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
+          <div>
+            <h1 className="text-2xl font-semibold">{document.title}</h1>
+            <p className="text-xs text-neutral-500">{sentenceList.length} sentences</p>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <button
-            className="flex items-center gap-2 rounded-md border border-neutral-300 px-3 py-2 text-sm font-medium hover:border-primary dark:border-neutral-700"
-            onClick={() => void handleMasterPlay()}
-          >
-            {playingRef.current ? (
-              <>
-                <Pause className="h-4 w-4" /> Pause
-              </>
-            ) : (
-              <>
-                <Play className="h-4 w-4" /> Master play
-              </>
-            )}
-          </button>
-        </div>
+        
+        {/* Page Audio Player */}
+        <PageAudioPlayer
+          ref={pageAudioPlayerRef}
+          documentId={documentId}
+          pageIndex={pageIndex}
+          sentences={currentPageSentences}
+          onCurrentSentenceChange={(sentenceIndex) => {
+            void logReaderEvent('ReaderView', 'current_sentence_changed', {
+              previousSentence: currentPlayingSentence,
+              newSentence: sentenceIndex,
+              pageIndex,
+              timestamp: Date.now()
+            });
+            setCurrentPlayingSentence(sentenceIndex);
+          }}
+        />
       </header>
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white p-3 text-sm shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
         <button
@@ -551,6 +675,7 @@ export function ReaderView({ documentId }: ReaderViewProps) {
             <div className="text-lg leading-relaxed">
               {paragraph.map((sentence, sentenceIndex) => {
                 const isActive = activeSentence === sentence.index;
+                const isCurrentlyPlaying = currentPlayingSentence === sentence.index;
                 const isTranslationOpen = openSentenceTranslations[sentence.index];
                 const owningPageIndex = sentenceToPageIndex.get(sentence.index);
                 const sentenceChunkIndex = sentenceToChunkIndex.get(sentence.index);
@@ -570,15 +695,25 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                     <span className="inline-flex items-center gap-2 align-baseline">
                       <button
                         type="button"
-                        className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-neutral-300 text-neutral-700 hover:border-primary hover:text-primary dark:border-neutral-700 dark:text-neutral-200"
-                        onClick={() => void playSentence(sentence.index, sentence)}
-                        aria-label={`Play sentence ${sentence.index + 1}`}
+                        className={`inline-flex h-7 w-7 items-center justify-center rounded-full border transition-colors ${
+                          isCurrentlyPlaying
+                            ? 'border-green-400 bg-green-50 text-green-700 dark:border-green-500 dark:bg-green-900/30 dark:text-green-300'
+                            : 'border-neutral-300 text-neutral-700 hover:border-primary hover:text-primary dark:border-neutral-700 dark:text-neutral-200'
+                        }`}
+                        onClick={() => void handleSentencePlayPause(sentence)}
+                        aria-label={`Jump to sentence ${sentence.index + 1}`}
                       >
-                        <Play className="h-4 w-4" />
+                        {isCurrentlyPlaying ? (
+                          <Pause className="h-4 w-4" />
+                        ) : (
+                          <Play className="h-4 w-4" />
+                        )}
                       </button>
                       <span
                         className={`inline-block rounded px-1 py-0.5 transition-colors ${
-                          isActive
+                          isCurrentlyPlaying
+                            ? 'bg-green-100 ring-2 ring-green-400 dark:bg-green-900/30 dark:ring-green-500'
+                            : isActive
                             ? 'bg-primary/10 ring-1 ring-primary/40 dark:bg-primary/20'
                             : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'
                         }`}

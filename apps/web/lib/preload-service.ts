@@ -1,8 +1,11 @@
 // Pre-loading service to fetch translations and TTS in background
 // Reduces API costs by batching and pre-loading content
 
-import { smartCache } from './smart-cache';
+import { smartCache } from '@/lib/smart-cache';
 import { translateSentences } from '@/utils/translateSentences';
+import { getTtsProvider } from '@/providers/tts';
+import { ACTIVE_TTS_PROVIDER } from '@/lib/config';
+import { pageAudioService } from '@/lib/page-audio';
 import type { TranslationDirection } from '@/providers/translation/base';
 
 interface PreloadConfig {
@@ -98,6 +101,9 @@ class PreloadService {
     this.requestQueue.push(async () => {
       this.activeRequests.add(requestId);
       try {
+        // Preload page-level audio first (highest priority)
+        await this.preloadPageAudio(page);
+        // Then preload translations
         await this.preloadPageTranslations(page, direction);
         console.log(`✅ Preloaded page ${page.pageIndex}`);
       } catch (error) {
@@ -332,6 +338,25 @@ class PreloadService {
   updateConfig(newConfig: Partial<PreloadConfig>): void {
     this.config = { ...this.config, ...newConfig };
     console.log('📋 Preload config updated:', this.config);
+  }
+
+  // Preload page-level audio
+  private async preloadPageAudio(page: DocumentPage): Promise<void> {
+    try {
+      // Convert page sentences to Sentence objects for the audio service
+      const sentences = page.sentences.map((text, index) => ({
+        id: `${page.documentId}_${page.pageIndex}_${index}`,
+        documentId: page.documentId,
+        index: index,
+        text_raw: text,
+        tokens: []
+      }));
+
+      await pageAudioService.preloadPageAudio(page.documentId, page.pageIndex, sentences);
+      console.log(`🎵 Preloaded page audio for page ${page.pageIndex}`);
+    } catch (error) {
+      console.warn(`Failed to preload page audio for page ${page.pageIndex}:`, error);
+    }
   }
 
   // Get stats

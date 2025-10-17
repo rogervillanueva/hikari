@@ -292,6 +292,25 @@ class SmartCache {
     return totalAccess / entries.length;
   }
 
+  // Generic cache methods for additional data
+  get(key: string): string | null {
+    try {
+      if (typeof window === 'undefined') return null;
+      return localStorage.getItem(`hikari-generic-cache:${key}`);
+    } catch {
+      return null;
+    }
+  }
+
+  set(key: string, value: string): void {
+    try {
+      if (typeof window === 'undefined') return;
+      localStorage.setItem(`hikari-generic-cache:${key}`, value);
+    } catch (error) {
+      console.warn('Failed to store in generic cache:', error);
+    }
+  }
+
   // Clear cache (for debugging)
   clear(): void {
     this.translationCache = {};
@@ -301,6 +320,13 @@ class SmartCache {
       localStorage.removeItem('hikari-translation-cache');
       localStorage.removeItem('hikari-tts-cache');
       localStorage.removeItem('hikari-document-cache');
+      // Clear generic cache items
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i);
+        if (key?.startsWith('hikari-generic-cache:')) {
+          localStorage.removeItem(key);
+        }
+      }
     }
   }
 }
