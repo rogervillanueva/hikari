@@ -36,12 +36,87 @@ function escapeSsml(text: string) {
     .replace(/'/g, '&apos;');
 }
 
+function detectEmotionalContext(text: string): string | null {
+  const lowerText = text.toLowerCase();
+  
+  // Enhanced patterns for different emotions/styles in both Japanese and English
+  const emotionalPatterns = {
+    fearful: /\b(scary|terrifying|frightening|ominous|dark|sinister|menacing|eerie|creepy|haunting|dread|horror|nightmare|ghostly|shadows|lurking|whisper|evil|danger|threat|afraid|fear|panic|scream|恐|怖|暗|影|悪|危険|驚|叫)\b/gi,
+    angry: /\b(furious|rage|anger|mad|irritated|frustrated|outraged|livid|enraged|hostile|aggressive|violent|hate|despise|disgusted|怒|腹|憤|激|嫌)\b/gi,
+    sad: /\b(sad|sorrow|grief|mourning|melancholy|depressed|heartbroken|tragic|devastating|loss|death|goodbye|farewell|tears|crying|lonely|empty|悲|寂|涙|泣|死|別)\b/gi,
+    cheerful: /\b(happy|joy|excited|wonderful|amazing|fantastic|great|excellent|delighted|thrilled|celebration|party|laugh|smile|cheerful|bright|sunny|嬉|楽|喜|笑|明|幸)\b/gi,
+    whispering: /\b(whisper|quietly|softly|secretly|confidentially|hushed|murmur|breathe|intimate|囁|静|密|秘)\b/gi,
+    hopeful: /\b(hope|optimistic|bright|future|dreams|aspiration|potential|possibility|opportunity|tomorrow|better|improve|success|achievement|希望|夢|未来|可能|成功|明日)\b/gi
+  };
+  
+  // Count matches for each emotion
+  const emotionScores: { [key: string]: number } = {};
+  
+  for (const [emotion, pattern] of Object.entries(emotionalPatterns)) {
+    const matches = lowerText.match(pattern);
+    emotionScores[emotion] = matches ? matches.length : 0;
+  }
+  
+  // Find the emotion with the highest score
+  let maxEmotion: string | null = null;
+  let maxScore = 0;
+  
+  for (const [emotion, score] of Object.entries(emotionScores)) {
+    if (score > maxScore) {
+      maxEmotion = emotion;
+      maxScore = score;
+    }
+  }
+  
+  // Enhanced detection: lower threshold for stronger emotional impact
+  const strongIndicators = ['terrifying', 'nightmare', 'furious', 'devastated', 'whisper', '恐怖', '悪夢', '激怒', '囁く'];
+  const hasStrongIndicator = strongIndicators.some(indicator => lowerText.includes(indicator));
+  
+  if (maxScore >= 1 || hasStrongIndicator) {
+    console.log(`[Azure TTS] Detected emotion: ${maxEmotion} (score: ${maxScore})`);
+    return maxEmotion;
+  }
+  
+  return null;
+}
+
+function wrapWithEmotionalStyle(text: string, voice: string, emotion: string): string {
+  // Enhanced voice support - more voices can handle emotional styles
+  const emotionalVoices = [
+    'en-US-AriaNeural', 'en-US-JennyNeural', 'en-US-GuyNeural', 
+    'en-US-DavisNeural', 'en-US-AmberNeural', 'en-US-AnaNeural',
+    'ja-JP-MayuNeural', 'ja-JP-AoiNeural', 'ja-JP-ShioriNeural'
+  ];
+  
+  if (!emotionalVoices.includes(voice)) {
+    console.log(`[Azure TTS] Voice ${voice} doesn't support emotional styles, using default`);
+    return text; // Voice doesn't support emotional styles
+  }
+  
+  // Map emotions to Azure's express-as styles
+  const emotionMapping: { [key: string]: string } = {
+    fearful: 'terrified',
+    angry: 'angry', 
+    sad: 'sad',
+    cheerful: 'cheerful',
+    whispering: 'whispering',
+    hopeful: 'hopeful'
+  };
+  
+  const azureStyle = emotionMapping[emotion] || emotion;
+  console.log(`[Azure TTS] Applying emotional style: ${azureStyle} to voice: ${voice}`);
+  
+  // Wrap text with appropriate mstts:express-as tag
+  return `<mstts:express-as style="${azureStyle}">${text}</mstts:express-as>`;
+}
+
 function resolveVoice(voiceId: string | undefined, lang: 'ja' | 'en') {
   if (voiceId?.trim()) return voiceId.trim();
   if (process.env.AZURE_TTS_VOICE?.trim()) return process.env.AZURE_TTS_VOICE.trim();
   if (process.env.NEXT_PUBLIC_TTS_VOICE?.trim()) return process.env.NEXT_PUBLIC_TTS_VOICE.trim();
-  if (lang === 'ja') return 'ja-JP-NanamiNeural';
-  return 'en-US-JennyNeural';
+  // Using highly expressive neural voices with emotional range
+  if (lang === 'ja') return 'ja-JP-MayuNeural';
+  return 'en-US-AriaNeural';
 }
 
 function resolveLocaleFromVoice(voice: string) {
@@ -191,13 +266,22 @@ async function speakSentenceServer(
 
   registerUsage(text.length);
 
-  // Handle SSML with marks - don't escape if already contains SSML
+  // Handle SSML with marks and emotional context detection
   let ssml: string;
   let expectedMarks: string[] = [];
   
   if (text.includes('<mark') || text.includes('<break')) {
-    // Text already contains SSML marks, use as-is
-    ssml = `<?xml version="1.0" encoding="utf-8"?>\n<speak version="1.0" xml:lang="${locale}"><voice name="${voice}">${text}</voice></speak>`;
+    // Text already contains SSML marks, use as-is but check for emotional context
+    let processedText = text;
+    
+    // Detect emotional context from the text content (excluding SSML tags)
+    const textContent = text.replace(/<[^>]+>/g, '');
+    const emotion = detectEmotionalContext(textContent);
+    if (emotion) {
+      processedText = wrapWithEmotionalStyle(text, voice, emotion);
+    }
+    
+    ssml = `<?xml version="1.0" encoding="utf-8"?>\n<speak version="1.0" xml:lang="${locale}" xmlns:mstts="https://www.w3.org/2001/mstts"><voice name="${voice}">${processedText}</voice></speak>`;
     
     // Extract mark names for timing tracking
     const markMatches = text.match(/<mark name="([^"]+)"/g);
@@ -208,8 +292,16 @@ async function speakSentenceServer(
       }).filter(Boolean);
     }
   } else {
-    // Plain text, escape it
-    ssml = `<?xml version="1.0" encoding="utf-8"?>\n<speak version="1.0" xml:lang="${locale}"><voice name="${voice}">${escapeSsml(text)}</voice></speak>`;
+    // Plain text, escape it and check for emotional context
+    let processedText = escapeSsml(text);
+    
+    // Detect emotional context
+    const emotion = detectEmotionalContext(text);
+    if (emotion) {
+      processedText = wrapWithEmotionalStyle(processedText, voice, emotion);
+    }
+    
+    ssml = `<?xml version="1.0" encoding="utf-8"?>\n<speak version="1.0" xml:lang="${locale}" xmlns:mstts="https://www.w3.org/2001/mstts"><voice name="${voice}">${processedText}</voice></speak>`;
   }
 
   const response = await fetch(endpoint, {

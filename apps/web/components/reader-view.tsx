@@ -304,8 +304,10 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     }), [pages, documentId]
   );
 
-  // Get sentences for current page
-  const currentPageSentences = pages[pageIndex]?.flat() || [];
+  // Get sentences for current page (memoized to prevent unnecessary re-renders)
+  const currentPageSentences = useMemo(() => {
+    return pages[pageIndex]?.flat() || [];
+  }, [pages, pageIndex]);
   
   void logReaderEvent('ReaderView', 'current_page_sentences_computed', {
     pageIndex,
@@ -322,6 +324,46 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     direction,
     enabled: true,
   });
+
+  // Handle page transitions - reset audio state when page changes
+  const prevPageIndexRef = useRef(pageIndex);
+  useEffect(() => {
+    const prevPageIndex = prevPageIndexRef.current;
+    const currentPageIndex = pageIndex;
+    
+    if (prevPageIndex !== currentPageIndex) {
+      void logReaderEvent('ReaderView', 'page_transition_audio_reset', {
+        fromPage: prevPageIndex,
+        toPage: currentPageIndex,
+        hadAudioPlayer: !!pageAudioPlayerRef.current,
+        wasPlaying: pageAudioPlayerRef.current?.isPlaying() || false,
+        currentPlayingSentence
+      });
+      
+      // Reset audio state when switching pages
+      if (pageAudioPlayerRef.current) {
+        // Pause any playing audio
+        pageAudioPlayerRef.current.pause();
+        
+        void logReaderEvent('ReaderView', 'page_transition_audio_paused', {
+          fromPage: prevPageIndex,
+          toPage: currentPageIndex
+        });
+      }
+      
+      // Clear current playing sentence to reset highlighting
+      setCurrentPlayingSentence(null);
+      
+      void logReaderEvent('ReaderView', 'page_transition_state_reset', {
+        fromPage: prevPageIndex,
+        toPage: currentPageIndex,
+        resetCurrentPlayingSentence: true
+      });
+    }
+    
+    // Update the ref for the next comparison
+    prevPageIndexRef.current = currentPageIndex;
+  }, [pageIndex, currentPlayingSentence]);
 
   const ensureChunkTranslations = useCallback(
     async (targetChunk: number) => {
@@ -548,19 +590,40 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     
     try {
       if (pageAudioPlayerRef.current) {
+        // Find the page-relative index for this sentence
+        const pageRelativeIndex = currentPageSentences.findIndex(s => s.index === sentence.index);
+        
+        if (pageRelativeIndex === -1) {
+          void logReaderEvent('ReaderView', 'sentence_not_on_current_page', { 
+            sentenceIndex: sentence.index,
+            currentPageSentences: currentPageSentences.map(s => s.index)
+          });
+          return;
+        }
+        
         // If this sentence is currently playing, pause the audio
         if (currentPlayingSentence === sentence.index && pageAudioPlayerRef.current.isPlaying()) {
-          void logReaderEvent('ReaderView', 'pausing_current_sentence', { sentenceIndex: sentence.index });
-          void logAudioDebug('pausing_current_sentence', { sentenceIndex: sentence.index });
+          void logReaderEvent('ReaderView', 'pausing_current_sentence', { 
+            sentenceIndex: sentence.index,
+            pageRelativeIndex 
+          });
+          void logAudioDebug('pausing_current_sentence', { 
+            sentenceIndex: sentence.index,
+            pageRelativeIndex 
+          });
           pageAudioPlayerRef.current.pause();
         } else {
           void logReaderEvent('ReaderView', 'jumping_to_sentence', { 
             sentenceIndex: sentence.index,
+            pageRelativeIndex,
             fromSentence: currentPlayingSentence 
           });
-          void logAudioDebug('jumping_to_sentence', { sentenceIndex: sentence.index });
-          // Jump to this sentence and start playing
-          await pageAudioPlayerRef.current.jumpToSentence(sentence.index);
+          void logAudioDebug('jumping_to_sentence', { 
+            sentenceIndex: sentence.index,
+            pageRelativeIndex 
+          });
+          // Jump to this sentence using page-relative index
+          await pageAudioPlayerRef.current.jumpToSentence(pageRelativeIndex);
         }
         setActiveSentence(sentence.index);
       } else {

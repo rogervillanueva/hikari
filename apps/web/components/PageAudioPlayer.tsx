@@ -48,6 +48,14 @@ export const PageAudioPlayer = forwardRef<PageAudioPlayerRef, PageAudioPlayerPro
   // Separate state for progress bar to avoid sentence-change interference
   const [progressTime, setProgressTime] = useState(0);
   
+  // Helper function to convert page-relative index to global sentence index
+  const getGlobalSentenceIndex = useCallback((pageRelativeIndex: number): number | null => {
+    if (pageRelativeIndex >= 0 && pageRelativeIndex < sentences.length) {
+      return sentences[pageRelativeIndex].index;
+    }
+    return null;
+  }, [sentences]);
+  
   // Use ref to store the most up-to-date time for seeker calculations
   const currentTimeRef = useRef(0);
 
@@ -68,6 +76,12 @@ export const PageAudioPlayer = forwardRef<PageAudioPlayerRef, PageAudioPlayerPro
     if (sentences.length === 0) {
       void logReaderEvent('PageAudioPlayer', 'no_sentences_to_load', { documentId, pageIndex });
       void logAudioDebug('no_sentences', { documentId, pageIndex });
+      return;
+    }
+    
+    // Prevent concurrent loading
+    if (isLoading) {
+      void logAudioDebug('already_loading_page_audio', { documentId, pageIndex });
       return;
     }
     
@@ -124,7 +138,53 @@ export const PageAudioPlayer = forwardRef<PageAudioPlayerRef, PageAudioPlayerPro
       setIsLoading(false);
       void logReaderEvent('PageAudioPlayer', 'loading_completed', { documentId, pageIndex });
     }
-  }, [documentId, pageIndex, sentences]);
+  }, [documentId, pageIndex, sentences, isLoading]);
+
+  // Handle page index changes - reset player state for clean transitions
+  const prevPageIndexRef = useRef(pageIndex);
+  useEffect(() => {
+    const prevPageIndex = prevPageIndexRef.current;
+    const currentPageIndex = pageIndex;
+    
+    if (prevPageIndex !== currentPageIndex) {
+      void logAudioDebug('page_index_changed', {
+        fromPage: prevPageIndex,
+        toPage: currentPageIndex,
+        wasPlaying: isPlaying
+      });
+      
+      // Reset all player state for clean page transition
+      setIsPlaying(false);
+      setCurrentTime(0);
+      setProgressTime(0);
+      setCurrentSentence(null);
+      setLoadingSentenceIndex(null);
+      
+      // Reset the audio element's current time
+      const audio = getAudioElement();
+      if (audio) {
+        audio.pause();
+        audio.currentTime = 0;
+        void logAudioDebug('page_transition_audio_reset', {
+          fromPage: prevPageIndex,
+          toPage: currentPageIndex,
+          audioReset: true
+        });
+      }
+      
+      // Clear any current sentence highlighting by notifying parent
+      onCurrentSentenceChange?.(null);
+      
+      void logAudioDebug('page_transition_state_reset', {
+        fromPage: prevPageIndex,
+        toPage: currentPageIndex,
+        stateCleared: true
+      });
+    }
+    
+    // Update the ref for the next comparison
+    prevPageIndexRef.current = currentPageIndex;
+  }, [pageIndex, isPlaying, onCurrentSentenceChange, getAudioElement]);
 
   // Setup audio element when page audio is loaded
   useEffect(() => {
@@ -178,24 +238,64 @@ export const PageAudioPlayer = forwardRef<PageAudioPlayerRef, PageAudioPlayerPro
           }))
         });
         setCurrentSentence(sentence);
-        onCurrentSentenceChange?.(sentence?.sentenceIndex ?? null);
+        const globalIndex = getGlobalSentenceIndex(sentence?.sentenceIndex ?? -1);
+        onCurrentSentenceChange?.(globalIndex);
       }
     };
 
     const handleEnded = () => {
-      void logAudioDebug('audio_ended', {});
+      void logAudioDebug('audio_ended', {
+        currentSentence: currentSentence?.sentenceIndex,
+        hasUnifiedAudio: !!pageAudio?.audioUrl,
+        isIndividualMode: !pageAudio?.audioUrl && !!currentSentence?.audioUrl
+      });
+      
+      // If we were playing individual sentence audio and unified audio exists, return to unified mode
+      if (!pageAudio?.audioUrl && currentSentence?.audioUrl) {
+        console.log('[PageAudioPlayer] 🔄 Individual sentence ended, but no unified audio to return to');
+      } else if (pageAudio?.audioUrl && currentSentence?.audioUrl) {
+        console.log('[PageAudioPlayer] 🔄 Individual sentence ended, returning to unified audio mode');
+        
+        // Switch back to unified audio
+        if (audio && pageAudio.audioUrl) {
+          audio.src = pageAudio.audioUrl;
+          // Continue from where this sentence ends in the unified audio
+          const nextTimeMs = currentSentence.endTimeMs + 100; // Small buffer
+          audio.currentTime = nextTimeMs / 1000;
+          
+          // Continue playing if we were in play mode
+          void audio.play().catch(error => {
+            console.error('Failed to continue unified playback:', error);
+          });
+          
+          return; // Don't reset states, let unified audio continue
+        }
+      }
+      
+      // Normal end behavior
       setIsPlaying(false);
       setCurrentSentence(null);
       onCurrentSentenceChange?.(null);
     };
 
     const handlePlay = () => {
-      void logAudioDebug('audio_play_event', { currentTime: audio.currentTime });
+      void logAudioDebug('audio_play_event', { 
+        currentTime: audio.currentTime,
+        duration: audio.duration,
+        src: audio.src.substring(0, 50) + '...',
+        readyState: audio.readyState
+      });
       setIsPlaying(true);
     };
     
     const handlePause = () => {
-      void logAudioDebug('audio_pause_event', { currentTime: audio.currentTime });
+      void logAudioDebug('audio_pause_event', { 
+        currentTime: audio.currentTime,
+        duration: audio.duration,
+        src: audio.src.substring(0, 50) + '...',
+        paused: audio.paused,
+        readyState: audio.readyState
+      });
       setIsPlaying(false);
     };
 
@@ -264,9 +364,9 @@ export const PageAudioPlayer = forwardRef<PageAudioPlayerRef, PageAudioPlayerPro
       audio.removeEventListener('canplay', handleCanPlay);
       audio.removeEventListener('error', handleError);
     };
-  }, [pageAudio?.audioUrl, pageAudio?.sentenceTimestamps, currentSentence, onCurrentSentenceChange, getAudioElement]);
+  }, [pageAudio?.audioUrl, pageAudio?.sentenceTimestamps, currentSentence, onCurrentSentenceChange, getGlobalSentenceIndex, getAudioElement]);
 
-  // Load page audio on mount
+  // Load page audio on mount and when key dependencies change
   useEffect(() => {
     void logReaderEvent('PageAudioPlayer', 'load_page_audio_triggered', {
       documentId,
@@ -274,7 +374,7 @@ export const PageAudioPlayer = forwardRef<PageAudioPlayerRef, PageAudioPlayerPro
       sentenceCount: sentences.length
     });
     void loadPageAudio();
-  }, [loadPageAudio]);
+  }, [documentId, pageIndex, sentences]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -387,9 +487,10 @@ export const PageAudioPlayer = forwardRef<PageAudioPlayerRef, PageAudioPlayerPro
     
     if (sentence !== currentSentence) {
       setCurrentSentence(sentence);
-      onCurrentSentenceChange?.(sentence?.sentenceIndex ?? null);
+      const globalIndex = getGlobalSentenceIndex(sentence?.sentenceIndex ?? -1);
+      onCurrentSentenceChange?.(globalIndex);
     }
-  }, [duration, pageAudio, currentSentence, onCurrentSentenceChange, getAudioElement]);
+  }, [duration, pageAudio, currentSentence, onCurrentSentenceChange, getGlobalSentenceIndex, getAudioElement]);
 
   const handleSeek = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -464,7 +565,8 @@ export const PageAudioPlayer = forwardRef<PageAudioPlayerRef, PageAudioPlayerPro
       if (timestamp) {
         void logAudioDebug('jumpToSentence_found_timestamp', { timestamp });
         setCurrentSentence(timestamp);
-        onCurrentSentenceChange?.(sentenceIndex);
+        const globalIndex = getGlobalSentenceIndex(sentenceIndex);
+        onCurrentSentenceChange?.(globalIndex);
       } else {
         void logAudioDebug('jumpToSentence_no_timestamp', { 
           sentenceIndex, 
@@ -482,28 +584,75 @@ export const PageAudioPlayer = forwardRef<PageAudioPlayerRef, PageAudioPlayerPro
         }
       }
     } else {
-      console.log('[PageAudioPlayer] Using fallback mode - no audioUrl');
-      // Fallback mode: generate individual sentence audio
-      setLoadingSentenceIndex(sentenceIndex);
-      try {
-        const sentence = sentences[sentenceIndex];
-        if (sentence) {
-          // This would trigger individual sentence TTS generation
-          // For now, we'll simulate the jump
-          const timestamp = pageAudio.sentenceTimestamps.find(t => t.sentenceIndex === sentenceIndex);
-          if (timestamp) {
+      console.log('[PageAudioPlayer] 🎯 Using sentence-level audio mode');
+      
+      // Find the sentence timestamp with individual audio
+      const timestamp = pageAudio.sentenceTimestamps.find(t => t.sentenceIndex === sentenceIndex);
+      if (timestamp && timestamp.audioUrl) {
+        console.log('[PageAudioPlayer] 🎯 Loading individual sentence audio for', sentenceIndex);
+        
+        void logAudioDebug('sentence_level_jump', {
+          sentenceIndex,
+          hasIndividualAudio: !!timestamp.audioUrl,
+          durationMs: timestamp.durationMs
+        });
+
+        // Set the audio source to the individual sentence
+        audio.src = timestamp.audioUrl;
+        audio.currentTime = 0; // Start from beginning of this sentence
+        
+        // Update state immediately
+        setCurrentSentence(timestamp);
+        const globalIndex = getGlobalSentenceIndex(sentenceIndex);
+        onCurrentSentenceChange?.(globalIndex);
+        
+        // Wait for audio to load before playing
+        const handleCanPlaySentence = () => {
+          console.log('[PageAudioPlayer] 🎯 Individual sentence audio ready, duration:', audio.duration);
+          void logAudioDebug('sentence_audio_ready', {
+            sentenceIndex,
+            duration: audio.duration,
+            durationMs: timestamp.durationMs,
+            src: audio.src.substring(0, 50) + '...'
+          });
+          
+          audio.removeEventListener('canplay', handleCanPlaySentence);
+          
+          // Start playing
+          if (audio.paused) {
+            console.log('[PageAudioPlayer] Starting sentence-level playback');
+            audio.play().catch(error => {
+              console.error('Failed to start sentence playback:', error);
+            });
+          }
+        };
+        
+        audio.addEventListener('canplay', handleCanPlaySentence);
+        
+        // Also try to play immediately if already ready
+        if (audio.readyState >= 2) {
+          handleCanPlaySentence();
+        }
+      } else {
+        console.log('[PageAudioPlayer] ❌ No individual audio found for sentence', sentenceIndex);
+        // Fallback to old behavior
+        setLoadingSentenceIndex(sentenceIndex);
+        try {
+          const sentence = sentences[sentenceIndex];
+          if (sentence && timestamp) {
             setCurrentTime(timestamp.startTimeMs / 1000);
             setCurrentSentence(timestamp);
-            onCurrentSentenceChange?.(sentenceIndex);
+            const globalIndex = getGlobalSentenceIndex(sentenceIndex);
+            onCurrentSentenceChange?.(globalIndex);
           }
+        } catch (error) {
+          console.error('Failed to jump to sentence:', error);
+        } finally {
+          setLoadingSentenceIndex(null);
         }
-      } catch (error) {
-        console.error('Failed to jump to sentence:', error);
-      } finally {
-        setLoadingSentenceIndex(null);
       }
     }
-  }, [pageAudio, sentences, onCurrentSentenceChange, getAudioElement]);
+  }, [pageAudio, sentences, onCurrentSentenceChange, getGlobalSentenceIndex, getAudioElement]);
 
   const pause = useCallback(() => {
     const audio = getAudioElement();

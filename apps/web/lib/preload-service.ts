@@ -6,6 +6,7 @@ import { translateSentences } from '@/utils/translateSentences';
 import { getTtsProvider } from '@/providers/tts';
 import { ACTIVE_TTS_PROVIDER } from '@/lib/config';
 import { pageAudioService } from '@/lib/page-audio';
+import { SmartPageCache, createTranslationCache } from '@/lib/smart-page-cache';
 import type { TranslationDirection } from '@/providers/translation/base';
 
 interface PreloadConfig {
@@ -25,7 +26,7 @@ interface DocumentPage {
 
 class PreloadService {
   private config: PreloadConfig = {
-    pagesAhead: 2,
+    pagesAhead: 1, // Changed from 2 to 1 - now loads current + 1 ahead (2 total)
     maxBatchSize: 50,
     maxConcurrentRequests: 3,
     ttsEnabled: true,
@@ -35,10 +36,16 @@ class PreloadService {
   private activeRequests = new Set<string>();
   private requestQueue: Array<() => Promise<void>> = [];
   private isProcessingQueue = false;
+  
+  // Smart caches
+  private translationCache: SmartPageCache<any>;
 
   constructor() {
     // Process queue every 2 seconds
     setInterval(() => this.processQueue(), 2000);
+    
+    // Initialize smart translation cache
+    this.translationCache = createTranslationCache();
   }
 
   // Main preload function - call when user opens a document
@@ -48,16 +55,35 @@ class PreloadService {
     pages: DocumentPage[],
     direction: TranslationDirection
   ): Promise<void> {
-    console.log(`🚀 Starting preload for document ${documentId}, page ${currentPageIndex}`);
+    console.log(`🚀 Starting SMART preload for document ${documentId}, page ${currentPageIndex}`);
 
-    // Preload current page + next pages
-    const pagesToPreload = pages.slice(
-      currentPageIndex,
-      currentPageIndex + this.config.pagesAhead + 1
-    );
+    // Use smart prefetching for audio
+    if (this.config.ttsEnabled) {
+      const audioPages = pages.map(page => ({
+        pageIndex: page.pageIndex,
+        sentences: page.sentences.map((text, index) => ({
+          id: `${page.documentId}_${page.pageIndex}_${index}`,
+          documentId: page.documentId,
+          index: index,
+          text_raw: text,
+          tokens: []
+        }))
+      }));
 
-    for (const page of pagesToPreload) {
-      this.queuePagePreload(page, direction);
+      await pageAudioService.smartPrefetch(documentId, currentPageIndex, audioPages, pages.length);
+    }
+
+    // Use smart caching for translations
+    this.translationCache.setCurrentPage(currentPageIndex);
+    const translationTargets = this.translationCache.getPrefetchTargets();
+    
+    console.log(`📚 Smart translation prefetch targets:`, translationTargets);
+    
+    for (const pageIndex of translationTargets) {
+      if (pageIndex >= 0 && pageIndex < pages.length) {
+        const page = pages[pageIndex];
+        this.queuePagePreload(page, direction);
+      }
     }
 
     // Extract and preload common vocabulary
@@ -75,11 +101,37 @@ class PreloadService {
   ): Promise<void> {
     console.log(`📖 User advanced to page ${newPageIndex}`);
 
-    // Preload the next page that just came into range
-    const nextPageIndex = newPageIndex + this.config.pagesAhead;
-    if (nextPageIndex < pages.length) {
-      const nextPage = pages[nextPageIndex];
-      this.queuePagePreload(nextPage, direction);
+    // Smart prefetch for audio 
+    if (this.config.ttsEnabled) {
+      const audioPages = pages.map(page => ({
+        pageIndex: page.pageIndex,
+        sentences: page.sentences.map((text, index) => ({
+          id: `${page.documentId}_${page.pageIndex}_${index}`,
+          documentId: page.documentId,
+          index: index,
+          text_raw: text,
+          tokens: []
+        }))
+      }));
+
+      await pageAudioService.smartPrefetch(documentId, newPageIndex, audioPages, pages.length);
+    }
+
+    // Smart prefetch for translations
+    this.translationCache.setCurrentPage(newPageIndex);
+    const translationTargets = this.translationCache.getPrefetchTargets();
+    
+    for (const pageIndex of translationTargets) {
+      if (pageIndex >= 0 && pageIndex < pages.length) {
+        const page = pages[pageIndex];
+        
+        // Check if already cached
+        const cached = this.translationCache.get(pageIndex) || smartCache.getDocumentTranslations(page.documentId, page.pageIndex);
+        if (!cached) {
+          console.log(`📚 Queueing translation prefetch for page ${pageIndex}`);
+          this.queuePagePreload(page, direction);
+        }
+      }
     }
   }
 
@@ -91,21 +143,27 @@ class PreloadService {
       return; // Already processing
     }
 
-    // Check if already cached
+    // Check if already in smart cache
+    const smartCached = this.translationCache.get(page.pageIndex);
+    if (smartCached) {
+      console.log(`✅ Page ${page.pageIndex} already in smart cache`);
+      return;
+    }
+
+    // Check if already in old cache
     const cached = smartCache.getDocumentTranslations(page.documentId, page.pageIndex);
     if (cached) {
-      console.log(`✅ Page ${page.pageIndex} already cached`);
+      console.log(`✅ Page ${page.pageIndex} found in old cache, migrating to smart cache`);
+      this.translationCache.set(page.pageIndex, cached);
       return;
     }
 
     this.requestQueue.push(async () => {
       this.activeRequests.add(requestId);
       try {
-        // Preload page-level audio first (highest priority)
-        await this.preloadPageAudio(page);
-        // Then preload translations
+        // Preload translations
         await this.preloadPageTranslations(page, direction);
-        console.log(`✅ Preloaded page ${page.pageIndex}`);
+        console.log(`✅ Smart preloaded page ${page.pageIndex}`);
       } catch (error) {
         console.error(`❌ Failed to preload page ${page.pageIndex}:`, error);
       } finally {
@@ -202,6 +260,9 @@ class PreloadService {
           smartCache.getTranslation(text, direction) || ''
         );
         smartCache.setDocumentTranslations(page.documentId, page.pageIndex, allTranslations);
+        
+        // Also store in smart translation cache
+        this.translationCache.set(page.pageIndex, allTranslations);
 
       } catch (error) {
         console.error('Batch translation failed:', error);
@@ -366,6 +427,8 @@ class PreloadService {
       queuedRequests: this.requestQueue.length,
       config: this.config,
       cacheStats: smartCache.getStats(),
+      audioCache: pageAudioService.getCacheStats(),
+      translationCache: this.translationCache.getStats(),
     };
   }
 }

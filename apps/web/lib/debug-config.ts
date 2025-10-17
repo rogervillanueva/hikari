@@ -3,7 +3,7 @@
 
 export const DEBUG_CONFIG = {
   // Audio debugging - logs audio events, playback state, etc.
-  AUDIO: true,
+  AUDIO: false,
   
   // Reader debugging - logs component events, user interactions, etc.
   READER: false,
