@@ -1,16 +1,18 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 import { useRouter } from 'next/navigation';
 import { Ellipsis, Pause, Play } from 'lucide-react';
-import {
-  ACTIVE_DICTIONARY_PROVIDER,
-  ACTIVE_TRANSLATION_PROVIDER,
-  ACTIVE_TTS_PROVIDER,
-} from '@/lib/config';
+import { ACTIVE_TRANSLATION_PROVIDER, ACTIVE_TTS_PROVIDER } from '@/lib/config';
 import { readerConfig } from '@/config/reader';
 import { useDocumentsStore } from '@/store/documents';
-import { getDictionaryProvider } from '@/providers/dictionary/mock';
 import { getTtsProvider } from '@/providers/tts';
 import type { Sentence } from '@/lib/types';
 import type { TranslationDirection } from '@/providers/translation/base';
@@ -31,12 +33,28 @@ export function ReaderView({ documentId }: ReaderViewProps) {
   const [openSentenceTranslations, setOpenSentenceTranslations] = useState<Record<number, boolean>>({});
   const [chunkTranslations, setChunkTranslations] = useState<Record<number, Record<string, string>>>({});
   const [loadingChunks, setLoadingChunks] = useState<Record<number, boolean>>({});
-  const [wordPopup, setWordPopup] = useState<{
+  const [selectionPopup, setSelectionPopup] = useState<{
     sentence: Sentence;
-    token: string;
+    text: string;
     translation: string;
-    sentenceTranslation?: string;
+    isLoading: boolean;
   } | null>(null);
+  type ActiveSelection = {
+    sentence: Sentence;
+    start: number;
+    end: number;
+    pointerId: number;
+  };
+  type CompletedSelection = {
+    sentence: Sentence;
+    start: number;
+    end: number;
+    text: string;
+  };
+  const [activeSelection, setActiveSelection] = useState<ActiveSelection | null>(null);
+  const [completedSelection, setCompletedSelection] = useState<CompletedSelection | null>(null);
+  const activeSelectionRef = useRef<ActiveSelection | null>(null);
+  const selectionTokenRef = useRef<string | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -240,6 +258,203 @@ export function ReaderView({ documentId }: ReaderViewProps) {
 
   const sourceLanguage = document?.lang_source ?? 'ja';
   const direction: TranslationDirection = sourceLanguage === 'en' ? 'en-ja' : 'ja-en';
+  const targetLanguage = direction === 'ja-en' ? 'en' : 'ja';
+
+  useEffect(() => {
+    activeSelectionRef.current = activeSelection;
+  }, [activeSelection]);
+
+  const translateSelection = useCallback(
+    async (text: string, sentence: Sentence, selectionKey: string) => {
+      if (!document) {
+        return;
+      }
+      if (selectionTokenRef.current !== selectionKey) {
+        return;
+      }
+      setSelectionPopup({
+        sentence,
+        text,
+        translation: 'Translating…',
+        isLoading: true,
+      });
+      try {
+        const response = await fetch('/api/translate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sentences: [text],
+            src: sourceLanguage,
+            tgt: targetLanguage,
+            documentId: document.id,
+            provider: ACTIVE_TRANSLATION_PROVIDER,
+          }),
+        });
+        if (!response.ok) {
+          throw new Error(`Translation request failed: ${response.status}`);
+        }
+        const data: { translations?: string[] } = await response.json();
+        const translated = data.translations?.[0]?.trim();
+        if (selectionTokenRef.current !== selectionKey) {
+          return;
+        }
+        setSelectionPopup({
+          sentence,
+          text,
+          translation: translated && translated.length ? translated : 'Translation unavailable',
+          isLoading: false,
+        });
+      } catch (error) {
+        console.error('Failed to translate selection', error);
+        if (selectionTokenRef.current !== selectionKey) {
+          return;
+        }
+        setSelectionPopup({
+          sentence,
+          text,
+          translation: 'Translation unavailable',
+          isLoading: false,
+        });
+      }
+    },
+    [document, sourceLanguage, targetLanguage]
+  );
+
+  const finalizeSelection = useCallback(
+    (event?: PointerEvent) => {
+      const selection = activeSelectionRef.current;
+      if (!selection) {
+        return;
+      }
+      let finalIndex = selection.end;
+      if (event) {
+        const element = document.elementFromPoint(event.clientX, event.clientY) as
+          | HTMLElement
+          | null;
+        const targetElement = element?.closest<HTMLElement>('[data-char-index]');
+        if (
+          targetElement?.dataset.charIndex &&
+          targetElement.dataset.sentenceIndex === `${selection.sentence.index}`
+        ) {
+          const parsed = Number(targetElement.dataset.charIndex);
+          if (!Number.isNaN(parsed)) {
+            finalIndex = parsed;
+          }
+        }
+      }
+      const start = Math.min(selection.start, finalIndex);
+      const end = Math.max(selection.start, finalIndex);
+      const characters = Array.from(selection.sentence.text_raw);
+      const text = characters.slice(start, end + 1).join('');
+      setActiveSelection(null);
+      activeSelectionRef.current = null;
+      if (!text.trim()) {
+        selectionTokenRef.current = null;
+        setCompletedSelection(null);
+        return;
+      }
+      const selectionKey = `${selection.sentence.id}:${start}-${end}`;
+      selectionTokenRef.current = selectionKey;
+      setCompletedSelection({
+        sentence: selection.sentence,
+        start,
+        end,
+        text,
+      });
+      void translateSelection(text, selection.sentence, selectionKey);
+    },
+    [translateSelection]
+  );
+
+  useEffect(() => {
+    if (!activeSelection) {
+      return;
+    }
+    const handlePointerMove = (event: PointerEvent) => {
+      const selection = activeSelectionRef.current;
+      if (!selection || event.pointerId !== selection.pointerId) {
+        return;
+      }
+      const element = document.elementFromPoint(event.clientX, event.clientY) as
+        | HTMLElement
+        | null;
+      const targetElement = element?.closest<HTMLElement>('[data-char-index]');
+      if (
+        !targetElement?.dataset.charIndex ||
+        targetElement.dataset.sentenceIndex !== `${selection.sentence.index}`
+      ) {
+        return;
+      }
+      const parsed = Number(targetElement.dataset.charIndex);
+      if (Number.isNaN(parsed)) {
+        return;
+      }
+      setActiveSelection((prev) => {
+        if (!prev || prev.pointerId !== event.pointerId || prev.end === parsed) {
+          return prev;
+        }
+        return { ...prev, end: parsed };
+      });
+      activeSelectionRef.current = {
+        ...selection,
+        end: parsed,
+      };
+    };
+    const handlePointerUp = (event: PointerEvent) => {
+      const selection = activeSelectionRef.current;
+      if (!selection || event.pointerId !== selection.pointerId) {
+        return;
+      }
+      finalizeSelection(event);
+    };
+    const handlePointerCancel = (event: PointerEvent) => {
+      const selection = activeSelectionRef.current;
+      if (!selection || event.pointerId !== selection.pointerId) {
+        return;
+      }
+      setActiveSelection(null);
+      activeSelectionRef.current = null;
+      selectionTokenRef.current = null;
+    };
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerCancel);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerCancel);
+    };
+  }, [activeSelection, finalizeSelection]);
+
+  const handleSelectionPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLSpanElement>, sentence: Sentence, charIndex: number) => {
+      if (event.pointerType === 'mouse' && event.button !== 0) {
+        return;
+      }
+      setSelectionPopup(null);
+      setCompletedSelection(null);
+      selectionTokenRef.current = null;
+      const boundedIndex = Math.max(
+        0,
+        Math.min(charIndex, Array.from(sentence.text_raw).length - 1)
+      );
+      const nextSelection: ActiveSelection = {
+        sentence,
+        start: boundedIndex,
+        end: boundedIndex,
+        pointerId: event.pointerId,
+      };
+      setActiveSelection(nextSelection);
+      activeSelectionRef.current = nextSelection;
+    },
+    []
+  );
+
+  const handleCloseSelectionPopup = useCallback(() => {
+    setSelectionPopup(null);
+    setCompletedSelection(null);
+    selectionTokenRef.current = null;
+  }, []);
 
   const ensureChunkTranslations = useCallback(
     async (targetChunk: number) => {
@@ -469,26 +684,6 @@ export function ReaderView({ documentId }: ReaderViewProps) {
     playingRef.current = false;
   }, [activeSentence, sentenceList, playSentence]);
 
-  const handleWordClick = async (sentence: Sentence, token: string) => {
-    const dictionary = getDictionaryProvider(ACTIVE_DICTIONARY_PROVIDER);
-    const definitions = await dictionary.lookup(token, sourceLanguage, {
-      sentence: sentence.text_raw,
-      documentId: sentence.documentId,
-      direction,
-      providerName: ACTIVE_TRANSLATION_PROVIDER,
-    });
-    const topDefinition = definitions[0];
-    const cachedSentenceTranslation = sentenceTranslations[sentence.index];
-    const sentenceTranslation =
-      cachedSentenceTranslation ?? topDefinition?.examples?.[0]?.en ?? undefined;
-    setWordPopup({
-      sentence,
-      token,
-      translation: topDefinition?.senses[0] ?? token,
-      sentenceTranslation,
-    });
-  };
-
   if (!document) {
     return <p className="p-6 text-sm text-neutral-500">Loading document…</p>;
   }
@@ -553,7 +748,7 @@ export function ReaderView({ documentId }: ReaderViewProps) {
             key={`paragraph-${paragraphIndex}`}
             className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm transition-colors dark:border-neutral-800 dark:bg-neutral-900"
           >
-            <div className="text-lg leading-relaxed">
+            <div className="text-lg leading-relaxed whitespace-pre-wrap">
               {paragraph.map((sentence, sentenceIndex) => {
                 const isActive = activeSentence === sentence.index;
                 const isTranslationOpen = openSentenceTranslations[sentence.index];
@@ -570,6 +765,23 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                     ? loadingChunks[fallbackChunkIndex] ?? false
                     : false;
                 const translationText = sentenceTranslations[sentence.index];
+                const activeRange =
+                  activeSelection && activeSelection.sentence.index === sentence.index
+                    ? {
+                        start: Math.min(activeSelection.start, activeSelection.end),
+                        end: Math.max(activeSelection.start, activeSelection.end),
+                      }
+                    : null;
+                const completedRange =
+                  !activeRange &&
+                  completedSelection &&
+                  completedSelection.sentence.index === sentence.index
+                    ? {
+                        start: completedSelection.start,
+                        end: completedSelection.end,
+                      }
+                    : null;
+                const characters = Array.from(sentence.text_raw);
                 return (
                   <span key={sentence.id} className="inline-block align-baseline">
                     <span className="inline-flex items-center gap-2 align-baseline">
@@ -588,19 +800,32 @@ export function ReaderView({ documentId }: ReaderViewProps) {
                             : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'
                         }`}
                       >
-                        {sentence.text_raw.split(/(\s+)/).map((token, tokenIndex) => {
-                          if (!token.trim()) {
-                            return <span key={`${sentence.id}-${tokenIndex}`}>{token}</span>;
-                          }
+                        {characters.map((char, charIndex) => {
+                          const isInActiveRange =
+                            !!activeRange && charIndex >= activeRange.start && charIndex <= activeRange.end;
+                          const isInCompletedRange =
+                            !activeRange &&
+                            !!completedRange &&
+                            charIndex >= completedRange.start &&
+                            charIndex <= completedRange.end;
+                          const isSelected = isInActiveRange || isInCompletedRange;
+                          const displayChar = char === ' ' ? ' ' : char;
                           return (
-                            <button
-                              key={`${sentence.id}-${tokenIndex}`}
-                              type="button"
-                              className="rounded px-1 py-0.5 text-left focus:outline-none focus:ring-1 focus:ring-primary"
-                              onClick={() => void handleWordClick(sentence, token)}
+                            <span
+                              key={`${sentence.id}-${charIndex}`}
+                              data-sentence-index={sentence.index}
+                              data-char-index={charIndex}
+                              onPointerDown={(event) =>
+                                handleSelectionPointerDown(event, sentence, charIndex)
+                              }
+                              className={`relative inline-block select-none rounded-sm px-0.5 py-0.5 transition-all duration-150 ${
+                                isSelected
+                                  ? 'bg-primary/10 text-neutral-900 dark:bg-primary/30 dark:text-white -translate-y-0.5'
+                                  : ''
+                              }`}
                             >
-                              {token}
-                            </button>
+                              {displayChar}
+                            </span>
                           );
                         })}
                       </span>
@@ -626,34 +851,19 @@ export function ReaderView({ documentId }: ReaderViewProps) {
           </article>
         ))}
       </section>
-      {wordPopup && (
+      {selectionPopup && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal>
           <div className="w-full max-w-md rounded-lg border border-neutral-300 bg-white p-4 shadow-lg dark:border-neutral-700 dark:bg-neutral-950">
-            <h2 className="text-lg font-semibold">{wordPopup.token}</h2>
+            <h2 className="text-lg font-semibold">{selectionPopup.text}</h2>
             <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">
-              {wordPopup.translation}
+              {selectionPopup.translation}
             </p>
-            {(() => {
-              const sentenceTranslation = wordPopup.sentenceTranslation?.trim();
-              const baseTranslation = wordPopup.translation.trim();
-              if (!sentenceTranslation) {
-                return null;
-              }
-              if (sentenceTranslation === baseTranslation) {
-                return null;
-              }
-              return (
-                <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">
-                  {sentenceTranslation}
-                </p>
-              );
-            })()}
             <p className="mt-4 text-xs text-neutral-500">
-              Sentence: {wordPopup.sentence.text_raw}
+              Sentence: {selectionPopup.sentence.text_raw}
             </p>
             <button
               className="mt-4 rounded-md bg-primary px-3 py-2 text-sm font-medium text-white"
-              onClick={() => setWordPopup(null)}
+              onClick={handleCloseSelectionPopup}
             >
               Close
             </button>
