@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Ellipsis, Pause, Play } from 'lucide-react';
+import { Ellipsis, Pause, Play, ArrowLeft, Home } from 'lucide-react';
 import {
   ACTIVE_TRANSLATION_PROVIDER,
   ACTIVE_TTS_PROVIDER,
@@ -681,6 +681,35 @@ export function ReaderView({ documentId }: ReaderViewProps) {
 
   return (
     <div className="flex flex-col gap-4">
+      {/* Navigation Bar */}
+      <nav className="sticky top-0 z-10 border-b border-neutral-200 bg-white/95 backdrop-blur-sm dark:border-neutral-800 dark:bg-neutral-900/95">
+        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-3">
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              onClick={() => router.push('/documents')}
+              className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back to Documents
+            </button>
+            <div className="h-4 w-px bg-neutral-300 dark:bg-neutral-600" />
+            <button
+              type="button"
+              onClick={() => router.push('/documents')}
+              className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-neutral-700 transition-colors hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800 dark:hover:text-neutral-100"
+            >
+              <Home className="h-4 w-4" />
+              Library
+            </button>
+          </div>
+          <div className="text-sm text-neutral-500 dark:text-neutral-400">
+            Reading Mode
+          </div>
+        </div>
+      </nav>
+      
+      <div className="mx-auto max-w-5xl px-6">
       <header className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
           <div>
@@ -810,6 +839,7 @@ export function ReaderView({ documentId }: ReaderViewProps) {
           </article>
         ))}
       </section>
+      </div>
     </div>
   );
 }
