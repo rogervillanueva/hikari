@@ -6,6 +6,7 @@ import { translateSentences } from '@/utils/translateSentences';
 import { analyzeJapaneseText, generateFuriganaSegments, type DetailedAnalysis } from '../lib/morphology';
 import { FuriganaText } from '@/components/FuriganaText';
 import { smartCache } from '@/lib/smart-cache';
+import { X } from 'lucide-react';
 import type { TranslationDirection } from '@/providers/translation/base';
 
 interface TouchSelectableTextProps {
@@ -27,6 +28,8 @@ interface TranslationPopup {
   analysis: DetailedAnalysis;
   x: number;
   y: number;
+  isDragging?: boolean;
+  dragOffset?: { x: number; y: number };
 }
 
 export function TouchSelectableText({ 
@@ -43,6 +46,8 @@ export function TouchSelectableText({
   const [popup, setPopup] = useState<TranslationPopup | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const [popupDragging, setPopupDragging] = useState(false);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
   const charactersRef = useRef<HTMLSpanElement[]>([]);
   const longPressTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -217,6 +222,68 @@ export function TouchSelectableText({
   const closePopup = useCallback(() => {
     setPopup(null);
   }, []);
+
+  // Popup dragging handlers
+  const handlePopupMouseDown = useCallback((e: React.MouseEvent) => {
+    if (!popup) return;
+    
+    // Only allow dragging from the header area (not buttons or other interactive elements)
+    const target = e.target as HTMLElement;
+    const isHeaderArea = target.closest('.popup-header') || target.classList.contains('popup-header');
+    
+    if (isHeaderArea) {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      setDragOffset({
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+      });
+      setPopupDragging(true);
+    }
+  }, [popup]);
+
+  const handlePopupMouseMove = useCallback((e: MouseEvent) => {
+    if (!popupDragging || !popup) return;
+    
+    e.preventDefault();
+    
+    const newX = e.clientX - dragOffset.x;
+    const newY = e.clientY - dragOffset.y;
+    
+    // Keep popup within viewport bounds
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const popupWidth = 400; // approximate popup width
+    const popupHeight = 300; // approximate popup height
+    
+    const constrainedX = Math.max(10, Math.min(newX, viewportWidth - popupWidth - 10));
+    const constrainedY = Math.max(10, Math.min(newY, viewportHeight - popupHeight - 10));
+    
+    setPopup({
+      ...popup,
+      x: constrainedX,
+      y: constrainedY,
+    });
+  }, [popupDragging, popup, dragOffset]);
+
+  const handlePopupMouseUp = useCallback(() => {
+    setPopupDragging(false);
+  }, []);
+
+  // Global mouse event listeners for popup dragging
+  useEffect(() => {
+    if (popupDragging) {
+      document.addEventListener('mousemove', handlePopupMouseMove);
+      document.addEventListener('mouseup', handlePopupMouseUp);
+      
+      return () => {
+        document.removeEventListener('mousemove', handlePopupMouseMove);
+        document.removeEventListener('mouseup', handlePopupMouseUp);
+      };
+    }
+  }, [popupDragging, handlePopupMouseMove, handlePopupMouseUp]);
 
   // Handle TTS audio playback with smart caching
   const playAudio = useCallback(async (text: string) => {
@@ -426,13 +493,32 @@ export function TouchSelectableText({
       {/* Detailed Translation Popup */}
       {popup && (
         <div
-          className="fixed z-50 pointer-events-none"
+          className={`fixed z-50 pointer-events-none ${popupDragging ? 'cursor-grabbing' : ''}`}
           style={{
-            left: `${Math.min(popup.x, (typeof window !== 'undefined' ? window.innerWidth : 800) - 400)}px`,
-            top: `${Math.max(popup.y - 150, 10)}px`,
+            left: `${popup.x}px`,
+            top: `${popup.y}px`,
           }}
         >
-          <div className="pointer-events-auto bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl p-5 max-w-sm backdrop-blur-sm bg-white/95 dark:bg-neutral-900/95">            {/* Section 1: Base Form */}
+          <div 
+            className={`pointer-events-auto bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 rounded-lg shadow-xl max-w-sm backdrop-blur-sm bg-white/95 dark:bg-neutral-900/95 ${popupDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+            onMouseDown={handlePopupMouseDown}
+          >
+            {/* Draggable Header */}
+            <div className="popup-header flex justify-between items-center p-3 border-b border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 rounded-t-lg cursor-grab">
+              <div className="text-xs font-medium text-neutral-600 dark:text-neutral-400 uppercase tracking-wide">
+                Translation
+              </div>
+              <button
+                onClick={closePopup}
+                className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300 p-1 rounded-full hover:bg-neutral-200 dark:hover:bg-neutral-700 transition-colors"
+                aria-label="Close translation popup"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+            
+            {/* Popup Content */}
+            <div className="p-4">{/* Section 1: Base Form */}
             {popup.analysis.baseWord && (
               <div className="mb-4 pb-4 border-b border-neutral-200 dark:border-neutral-700">
                 <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-2 uppercase tracking-wide">
@@ -504,12 +590,15 @@ export function TouchSelectableText({
             </div>
 
             {/* Close Button */}
-            <button
-              onClick={closePopup}
-              className="w-full text-sm bg-primary text-white px-4 py-2 rounded-md hover:bg-primary/90 active:scale-95 transition-all duration-150 font-medium shadow-sm"
-            >
-              Close
-            </button>
+            <div className="mt-4 pt-4 border-t border-neutral-200 dark:border-neutral-700">
+              <button
+                onClick={closePopup}
+                className="w-full text-sm bg-primary text-white px-4 py-2 rounded-md hover:bg-primary/90 active:scale-95 transition-all duration-150 font-medium shadow-sm"
+              >
+                Close
+              </button>
+            </div>
+            </div>
           </div>
         </div>
       )}
