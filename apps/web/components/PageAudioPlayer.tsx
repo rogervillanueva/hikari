@@ -322,11 +322,29 @@ export const PageAudioPlayer = forwardRef<PageAudioPlayerRef, PageAudioPlayerPro
     };
 
     const handleError = (event: Event) => {
+      const audioElement = event.target as HTMLAudioElement;
+      const errorMessage = audioElement?.error?.message || 'Unknown audio error';
+      const errorCode = audioElement?.error?.code;
+      
       void logAudioDebug('audio_error', {
-        error: (event.target as HTMLAudioElement)?.error?.message || 'Unknown audio error',
-        src: audio.src,
-        readyState: audio.readyState
+        error: errorMessage,
+        errorCode,
+        src: audio.src?.substring(0, 50) + '...',
+        readyState: audio.readyState,
+        networkState: audio.networkState
       });
+      
+      console.error('[PageAudioPlayer] Audio error detected:', {
+        error: errorMessage,
+        code: errorCode,
+        src: audio.src?.substring(0, 50) + '...'
+      });
+      
+      // Trigger recovery on audio error
+      setTimeout(async () => {
+        console.warn('[PageAudioPlayer] Attempting recovery after audio error...');
+        await detectAndRecoverAudioIssues();
+      }, 1000);
     };
 
     // Set up the audio source only if URL has changed
@@ -387,21 +405,89 @@ export const PageAudioPlayer = forwardRef<PageAudioPlayerRef, PageAudioPlayerPro
     };
   }, []);
 
+  // Function to detect and recover from audio issues
+  const detectAndRecoverAudioIssues = useCallback(async (): Promise<boolean> => {
+    const audio = getAudioElement();
+    if (!audio || !pageAudio) return false;
+
+    // Check for common audio issues
+    const issues = [];
+    
+    // Issue 1: Audio source is empty or blob URL might be invalid
+    if (!audio.src || audio.src === '') {
+      issues.push('empty_src');
+    }
+    
+    // Issue 2: Audio element has error state
+    if (audio.error) {
+      issues.push('audio_error');
+    }
+    
+    // Issue 3: Duration is invalid (NaN or 0)
+    if (isNaN(audio.duration) || audio.duration === 0) {
+      issues.push('invalid_duration');
+    }
+    
+    // Issue 4: Ready state is too low for too long
+    if (audio.readyState < 2) {
+      issues.push('low_ready_state');
+    }
+    
+    // Issue 5: Network state indicates error
+    if (audio.networkState === 3) { // NETWORK_NO_SOURCE
+      issues.push('network_no_source');
+    }
+
+    if (issues.length > 0) {
+      void logAudioDebug('audio_issues_detected', { 
+        issues, 
+        audioSrc: audio.src?.substring(0, 50) + '...',
+        readyState: audio.readyState,
+        networkState: audio.networkState,
+        error: audio.error?.message,
+        duration: audio.duration
+      });
+      
+      console.warn('[PageAudioPlayer] 🚨 Audio issues detected, regenerating audio...', issues);
+      
+      // Clear current audio state
+      setPageAudio(null);
+      
+      // Force regeneration by clearing cache and reloading
+      await pageAudioService.clearPageAudio(documentId, pageIndex);
+      await loadPageAudio();
+      
+      return true; // Issues were detected and recovery attempted
+    }
+    
+    return false; // No issues detected
+  }, [documentId, pageIndex, pageAudio, getAudioElement, loadPageAudio]);
+
   const handlePlayPause = useCallback(async () => {
     const audio = getAudioElement();
     void logAudioDebug('play_pause_clicked', {
       hasAudio: !!audio,
       hasPageAudio: !!pageAudio,
       isPlaying,
-      audioSrc: audio?.src,
+      audioSrc: audio?.src?.substring(0, 50) + '...',
       audioPaused: audio?.paused,
       audioCurrentTime: audio?.currentTime,
       audioDuration: audio?.duration,
-      audioReadyState: audio?.readyState
+      audioReadyState: audio?.readyState,
+      audioNetworkState: audio?.networkState,
+      audioError: audio?.error?.message
     });
     
     if (!audio || !pageAudio) {
       void logAudioDebug('play_pause_failed', { reason: 'missing_audio_or_page_audio' });
+      return;
+    }
+
+    // First, check for audio issues and attempt recovery
+    const issuesDetected = await detectAndRecoverAudioIssues();
+    if (issuesDetected) {
+      void logAudioDebug('audio_recovery_attempted', { documentId, pageIndex });
+      // Recovery is in progress, don't proceed with play/pause
       return;
     }
 
@@ -410,6 +496,21 @@ export const PageAudioPlayer = forwardRef<PageAudioPlayerRef, PageAudioPlayerPro
       void logAudioDebug('audio_not_ready', { readyState: audio.readyState });
       // Try to load the audio first
       audio.load();
+      
+      // Wait a bit for load to complete, then try again
+      setTimeout(async () => {
+        if (audio.readyState >= 2) {
+          try {
+            const playPromise = audio.play();
+            if (playPromise !== undefined) {
+              await playPromise;
+            }
+          } catch (error) {
+            console.warn('[PageAudioPlayer] Play failed after load, attempting recovery...', error);
+            await detectAndRecoverAudioIssues();
+          }
+        }
+      }, 500);
       return;
     }
 
@@ -428,9 +529,13 @@ export const PageAudioPlayer = forwardRef<PageAudioPlayerRef, PageAudioPlayerPro
       } catch (error) {
         void logAudioDebug('play_failed', { error: error instanceof Error ? error.message : String(error) });
         console.error('Failed to play audio:', error);
+        
+        // Attempt recovery on play failure
+        console.warn('[PageAudioPlayer] Play failed, attempting recovery...');
+        await detectAndRecoverAudioIssues();
       }
     }
-  }, [isPlaying, pageAudio, getAudioElement]);
+  }, [isPlaying, pageAudio, getAudioElement, detectAndRecoverAudioIssues]);
 
   const handleRewind = useCallback(() => {
     const audio = getAudioElement();
@@ -534,6 +639,13 @@ export const PageAudioPlayer = forwardRef<PageAudioPlayerRef, PageAudioPlayerPro
         hasAudio: !!audio,
         hasPageAudio: !!pageAudio
       });
+      return;
+    }
+
+    // First, check for audio issues and attempt recovery
+    const issuesDetected = await detectAndRecoverAudioIssues();
+    if (issuesDetected) {
+      console.warn('[PageAudioPlayer] Audio issues detected during jumpToSentence, recovery in progress');
       return;
     }
 

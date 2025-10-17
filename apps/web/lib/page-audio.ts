@@ -575,6 +575,34 @@ export class PageAudioService {
     }
   }
 
+  // Clear specific page audio from cache (for recovery scenarios)
+  async clearPageAudio(documentId: string, pageIndex: number): Promise<void> {
+    const pageKey = this.generatePageKey(documentId, pageIndex);
+    const documentCache = this.getDocumentCache(documentId);
+    
+    console.log(`[PageAudioService] 🗑️ Clearing cached audio for document ${documentId} page ${pageIndex}`);
+    
+    // Remove from smart cache by clearing and reloading the cache
+    // This is a workaround since SmartPageCache doesn't expose a direct delete method
+    documentCache.clear();
+    
+    // Remove from old cache for compatibility
+    const cacheKey = `page_audio:${pageKey}`;
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem(`hikari-generic-cache:${cacheKey}`);
+      } catch (error) {
+        console.warn('Failed to remove from localStorage:', error);
+      }
+    }
+    
+    // Clear any ongoing loading promises
+    this.loadingPromises.delete(pageKey);
+    
+    // Note: We don't revoke blob URLs here as other components might still be using them
+    // The browser will clean them up when appropriate
+  }
+
   // Get cache statistics for all documents
   getCacheStats() {
     const allStats = Array.from(this.documentCaches.entries()).map(([documentId, cache]) => ({
