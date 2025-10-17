@@ -69,6 +69,38 @@ export function TouchSelectableText({
     };
   }, []);
 
+  // Calculate optimal popup position within viewport
+  const calculatePopupPosition = useCallback((x: number, y: number) => {
+    const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 800;
+    const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 600;
+    const popupWidth = 400; // Approximate popup width
+    const popupHeight = 400; // Approximate popup height
+    const margin = 20; // Margin from viewport edges
+
+    let popupX = x;
+    let popupY = y;
+
+    // Adjust X position to keep popup within viewport
+    if (popupX + popupWidth + margin > viewportWidth) {
+      // If popup would go off the right edge, position it to the left of the cursor
+      popupX = Math.max(margin, x - popupWidth);
+    } else {
+      // Keep some margin from the left edge
+      popupX = Math.max(margin, popupX);
+    }
+
+    // Adjust Y position to keep popup within viewport
+    if (popupY + popupHeight + margin > viewportHeight) {
+      // If popup would go off the bottom edge, position it above the cursor
+      popupY = Math.max(margin, y - popupHeight - 20);
+    } else {
+      // Position below the cursor with some offset
+      popupY = Math.max(margin, popupY + 20);
+    }
+
+    return { x: popupX, y: popupY };
+  }, []);
+
   const getCharacterIndexFromPoint = useCallback((x: number, y: number): number => {
     const container = containerRef.current;
     if (!container) return -1;
@@ -152,8 +184,9 @@ export function TouchSelectableText({
 
     // Get touch position for popup placement
     const touch = e.changedTouches[0];
-    const popupX = touch?.clientX ?? 0;
-    const popupY = touch?.clientY ?? 0;
+    const rawX = touch?.clientX ?? 0;
+    const rawY = touch?.clientY ?? 0;
+    const { x: popupX, y: popupY } = calculatePopupPosition(rawX, rawY);
 
     // Analyze and translate the selected text
     setIsTranslating(true);
@@ -411,12 +444,14 @@ export function TouchSelectableText({
         })()
       ]);
       
+      const { x: popupX, y: popupY } = calculatePopupPosition(e.clientX, e.clientY);
+      
       setPopup({
         text: selectedText,
         translation: translationResult,
         analysis,
-        x: e.clientX,
-        y: e.clientY,
+        x: popupX,
+        y: popupY,
       });
     } catch (error) {
       console.error('Translation/Analysis failed:', error);
@@ -437,12 +472,14 @@ export function TouchSelectableText({
         })),
       };
       
+      const { x: popupX, y: popupY } = calculatePopupPosition(e.clientX, e.clientY);
+      
       setPopup({
         text: selectedText,
         translation: 'Translation failed',
         analysis: fallbackAnalysis,
-        x: e.clientX,
-        y: e.clientY,
+        x: popupX,
+        y: popupY,
       });
     } finally {
       setIsTranslating(false);
